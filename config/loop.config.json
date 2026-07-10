@@ -1,0 +1,22 @@
+{
+  "activeModel": "gpt",
+  "models": {
+    "gpt": {
+      "model": "gpt-5.4-mini",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "api": "responses"
+    },
+    "deepseek": {
+      "model": "deepseek-v4-flash",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "api": "chat_completions"
+    }
+  },
+  "safetyLimits": {
+    "maxSteps": 3,
+    "maxTurns": 5
+  },
+  "tracePath": "traces/loop.jsonl"
+}
