@@ -5,7 +5,7 @@ export interface ReflectInput {
   verification: VerifyData;
 }
 
-/** Produce minimal feedback that the next observe stage can consume. */
+/** 生成下一轮 observe 阶段可以直接消费的最小反馈。 */
 export async function runReflect(input: ReflectInput): Promise<ReflectData> {
   return {
     summary: input.actionOutput,

@@ -1,8 +1,8 @@
 import type { LoopState } from "../domain/loop-state.js";
 
 /**
- * State creation is kept deterministic by receiving the timestamp. Tests can
- * assert exact values, while production passes a real ISO timestamp.
+ * 通过接收外部时间戳，让状态创建保持确定性：测试可以断言精确值，生产环境则
+ * 传入真实的 ISO 时间戳。
  */
 export function createLoopState(
   task: string,

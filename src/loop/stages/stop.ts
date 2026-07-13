@@ -11,12 +11,12 @@ export interface StopInput {
 }
 
 /**
- * Convert the evidence gathered by earlier stages into one explicit decision.
+ * 把前序阶段收集到的证据转换为一个明确的停止决策。
  *
- * The order is intentional:
- * 1. Runtime failures always fail, even if skeleton verification says pass.
- * 2. A verified plan condition is business success.
- * 3. maxSteps is only a safety fallback when success was not demonstrated.
+ * 判断顺序是有意设计的：
+ * 1. 运行时失败始终判为失败，即使骨架 verify 给出了通过结果。
+ * 2. 已验证的 plan 条件表示业务成功。
+ * 3. 只有尚未证明成功时，`maxSteps` 才作为防止失控的安全兜底。
  */
 export function decideStop(input: StopInput): StopDecision {
   if (input.failureReason) {

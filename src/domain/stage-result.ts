@@ -1,7 +1,6 @@
 /**
- * Every stage uses the same lifecycle envelope. Keeping status, timestamps and
- * data together gives the trace writer one uniform shape to serialize, while
- * the generic parameter preserves the strongly typed payload of each stage.
+ * 每个阶段都使用相同的生命周期外壳。把状态、时间戳和数据放在一起，使 trace
+ * writer 始终序列化同一种结构；泛型参数则保留各阶段 payload 的强类型信息。
  */
 export interface StageResult<T> {
   status: "pending" | "running" | "completed" | "failed" | "skipped";
@@ -12,7 +11,7 @@ export interface StageResult<T> {
   completedAt: string | null;
 }
 
-/** A sanitized error representation that is safe to write to the trace. */
+/** 已清理敏感细节、可以安全写入 trace 的错误表示。 */
 export interface StepError {
   name: string;
   message: string;

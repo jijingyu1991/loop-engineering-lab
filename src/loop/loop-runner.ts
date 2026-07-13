@@ -16,7 +16,7 @@ export interface RunLoopOptions {
   now?: () => string;
 }
 
-/** Repeat complete LoopSteps until the stop stage returns a terminal decision. */
+/** 重复执行完整的 LoopStep，直到 stop 阶段返回终态决策。 */
 export async function runLoop(options: RunLoopOptions): Promise<LoopState> {
   const now = options.now ?? (() => new Date().toISOString());
   const state = createLoopState(options.task, options.activeModel, now());
@@ -44,8 +44,8 @@ export async function runLoop(options: RunLoopOptions): Promise<LoopState> {
     state.steps.push(step);
 
     if (decision.shouldStop) {
-      // Copy the decision into durable state before writing the final event so
-      // callers and trace readers observe the same terminal facts.
+      // 先把决策复制到持久状态，再写入最终事件，确保调用方和 trace 阅读者看到
+      // 完全一致的终态事实，避免状态与审计记录出现短暂分歧。
       state.status = decision.status;
       state.stopReason = decision.reason;
       state.stoppedAt = now();

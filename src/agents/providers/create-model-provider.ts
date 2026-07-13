@@ -9,9 +9,9 @@ export interface ProviderOptions {
 }
 
 /**
- * Convert our provider-neutral config into the small option set required by
- * OpenAIProvider. DeepSeek exposes an OpenAI-compatible Chat Completions API,
- * so both providers share the same SDK adapter; only configuration changes.
+ * 把与 provider 无关的项目配置转换为 OpenAIProvider 所需的最小选项集合。
+ * DeepSeek 暴露了兼容 OpenAI 的 Chat Completions API，因此两种 provider
+ * 可以共用同一个 SDK 适配器，只需切换配置。
  */
 export function toProviderOptions(
   modelConfig: ModelConfig,

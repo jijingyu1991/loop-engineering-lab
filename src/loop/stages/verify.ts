@@ -7,8 +7,8 @@ export interface VerifyInput {
 }
 
 /**
- * This is a transparent skeleton verifier, not an independent reviewer Agent.
- * Its narrow contract is the seam where a real reviewer can be introduced.
+ * 这是行为透明的骨架 verifier，并不是独立的 reviewer Agent。它保持窄接口，
+ * 以后可以沿着这个边界接入真正的 reviewer，而不影响其他阶段。
  */
 export async function runVerify(input: VerifyInput): Promise<VerifyData> {
   const passed = input.stepIndex >= 3;

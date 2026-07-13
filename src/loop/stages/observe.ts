@@ -5,7 +5,7 @@ export interface ObserveInput {
   previousStep?: LoopStep;
 }
 
-/** Build the next iteration's context from durable loop state. */
+/** 从持久化的 loop 状态中构造下一轮迭代所需的上下文。 */
 export function runObserve(input: ObserveInput): ObserveData {
   return {
     task: input.task,

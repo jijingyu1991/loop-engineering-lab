@@ -41,8 +41,8 @@ async function pruneTraceFiles(input: {
     }),
   );
 
-  // Newest files come first. Everything after maxFiles is outside the
-  // retention window and can be removed without touching unrelated files.
+  // 最新文件排在最前面；位于 `maxFiles` 之后的匹配文件已超出保留窗口，可以
+  // 安全删除，同时不会触碰目录中的其他无关文件。
   files.sort((left, right) => right.modifiedAt - left.modifiedAt);
   await Promise.all(
     files.slice(input.maxFiles).map(async (file) => unlink(file.path)),
@@ -50,12 +50,11 @@ async function pruneTraceFiles(input: {
 }
 
 /**
- * Create one local JSONL file for one Loop run.
+ * 为每次 Loop 运行创建一个独立的本地 JSONL 文件。
  *
- * `basePath` is a naming template rather than the final file name. For
- * `traces/loop.jsonl`, each run gets `traces/loop-<timestamp>.jsonl`. Creating
- * the file before pruning means the current run participates in the same
- * newest-20 rule, including when the process later exits unexpectedly.
+ * `basePath` 是命名模板，而不是最终文件名。例如 `traces/loop.jsonl` 会为
+ * 每次运行生成 `traces/loop-<timestamp>.jsonl`。先创建文件再清理，可以让
+ * 当前运行也参与相同的“最新 20 个文件”规则，即使进程随后意外退出也一样。
  */
 export async function createRunTraceWriter(
   options: CreateRunTraceWriterOptions,
@@ -76,9 +75,9 @@ export async function createRunTraceWriter(
 
   await mkdir(directory, { recursive: true });
 
-  // Earlier versions appended every run to the unsuffixed base file. It cannot
-  // represent one-run-per-file retention, so remove it once during migration.
-  // `force` makes subsequent runs a no-op when that legacy file is absent.
+  // 旧版本会把每次运行追加到不带时间戳的基础文件中，无法表达“一次运行一个
+  // 文件”的保留策略，因此迁移时删除它。`force` 会让该旧文件不存在时的后续
+  // 运行安全地成为 no-op。
   await rm(options.basePath, { force: true });
   await writeFile(tracePath, "", { flag: "wx" });
   await pruneTraceFiles({ directory, prefix, extension, maxFiles });

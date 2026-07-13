@@ -9,9 +9,9 @@ export function createRunner(modelConfig: ModelConfig, apiKey: string): Runner {
   return new Runner({
     modelProvider,
     /**
-     * This learning project owns a local, provider-independent JSONL trace.
-     * SDK trace export is disabled so a DeepSeek credential is never sent to
-     * OpenAI's trace exporter and so there is only one trace to reason about.
+     * 这个学习项目维护一套本地、与 provider 无关的 JSONL trace。
+     * 禁用 SDK trace 导出既能避免把 DeepSeek 凭据发送给 OpenAI 的 trace
+     * exporter，也能保证学习和排查时只需理解一套 trace。
      */
     tracingDisabled: true,
   });

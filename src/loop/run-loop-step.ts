@@ -134,11 +134,10 @@ function createLoopStep(index: number, startedAt: string): LoopStep {
 }
 
 /**
- * Run exactly one complete LoopStep.
+ * 只运行一个完整的 LoopStep。
  *
- * This function is the protocol coordinator: it owns stage order but delegates
- * stage meaning to small functions. State mutation is intentionally localized
- * here so readers can follow every lifecycle transition in one place.
+ * 本函数是协议协调器：它负责阶段顺序，但把各阶段的业务含义委托给小函数。
+ * 状态变更被有意集中在这里，方便学习者在一个位置追踪所有生命周期转换。
  */
 export async function runLoopStep(
   input: RunLoopStepInput,
@@ -271,8 +270,8 @@ export async function runLoopStep(
       }),
   });
 
-  // decideStop itself is pure and should not fail. This guard makes the
-  // contract explicit if future stop implementations become more complex.
+  // `decideStop` 当前是纯函数，理论上不会失败。这里仍显式检查返回数据，确保
+  // 未来 stop 实现变复杂时，阶段契约被破坏也能立即暴露，而不是继续传播空值。
   if (!stopExecution.data) {
     throw new Error("Stop stage did not produce a decision");
   }

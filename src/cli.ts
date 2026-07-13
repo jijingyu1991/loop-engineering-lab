@@ -13,16 +13,15 @@ import { runAct } from "./loop/stages/act.js";
 import { createRunTraceWriter } from "./trace/create-run-trace-writer.js";
 
 /**
- * Compose infrastructure once, then hand the loop small dependencies. This is
- * the only place that knows about config files, environment variables and the
- * concrete Agents SDK classes.
+ * 在入口处一次性组装基础设施，再把小而明确的依赖交给 loop。这里是唯一了解
+ * 配置文件、环境变量和具体 Agents SDK 类的地方，业务编排无需依赖这些细节。
  */
 export async function runConfiguredLoop(
   task: string,
   configPath = resolve(process.cwd(), "config/loop.config.json"),
 ): Promise<LoopState> {
-  // Disable the SDK's process-wide exporter before constructing any Agent
-  // runtime. Local JSONL tracing below is a separate implementation.
+  // 在构造任何 Agent runtime 之前禁用 SDK 的进程级 exporter。下方使用的
+  // 本地 JSONL trace 是一套独立实现，不受该开关影响。
   disableSdkTracing();
 
   const loaded = await loadLoopConfig(configPath, process.env);

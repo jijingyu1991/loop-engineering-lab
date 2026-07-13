@@ -1,7 +1,7 @@
 import type { LoopStep } from "./loop-step.js";
 import type { StopReason } from "./stop-decision.js";
 
-/** The complete, traceable state owned by a single loop run. */
+/** 一次 loop 运行独立拥有的完整、可追踪状态。 */
 export interface LoopState {
   task: string;
   activeModel: string;

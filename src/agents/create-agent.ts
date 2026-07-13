@@ -3,8 +3,8 @@ import { Agent } from "@openai/agents";
 import type { ModelConfig } from "../config/config-schema.js";
 
 /**
- * Agent construction is isolated from the loop so tools and guardrails can be
- * added here later without teaching `loop-runner.ts` about SDK concepts.
+ * Agent 的构造与 loop 隔离。以后可以在这里添加 tools 和 guardrails，
+ * 而不必让 `loop-runner.ts` 理解 Agents SDK 的概念。
  */
 export function createActorAgent(modelConfig: ModelConfig): Agent {
   return new Agent({

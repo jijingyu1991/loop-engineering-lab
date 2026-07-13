@@ -1,10 +1,9 @@
 import { z } from "zod";
 
 /**
- * The API choice is part of model configuration rather than inferred from the
- * model name. That keeps provider behavior explicit: a future alias can point
- * at a different endpoint without adding another `if (modelName === ...)` in
- * application code.
+ * API 类型是模型配置的一部分，而不是根据模型名推断出来的。这样可以显式表达
+ * provider 的行为：未来即使某个别名改为指向其他端点，也不需要在业务代码中
+ * 再添加一条 `if (modelName === ...)` 判断。
  */
 export const modelConfigSchema = z.object({
   model: z.string().min(1),
@@ -48,12 +47,11 @@ export function parseLoopConfig(raw: unknown): LoopConfig {
 }
 
 /**
- * Resolve the selected model and credential once at the composition boundary.
+ * 在组合边界一次性解析当前选中的模型和凭据。
  *
- * The API key deliberately lives outside `LoopConfig`. LoopConfig is safe to
- * pass to trace/debug code; the returned `apiKey` is instead handed directly
- * to the Agent provider factory. This separation makes accidental credential
- * serialization much less likely.
+ * API key 被有意放在 `LoopConfig` 之外，因此可以安全地把 LoopConfig 交给
+ * trace 或调试代码；返回的 `apiKey` 则直接传给 Agent provider 工厂。这种隔离
+ * 能显著降低凭据被意外序列化的风险。
  */
 export function resolveActiveModel(
   config: LoopConfig,
@@ -61,8 +59,8 @@ export function resolveActiveModel(
 ): LoadedLoopConfig {
   const modelConfig = config.models[config.activeModel];
 
-  // The schema checks this relation. Keeping the runtime guard makes this
-  // function safe even if callers eventually construct LoopConfig manually.
+  // schema 已经检查了这层对应关系。这里仍保留运行时防护，确保未来调用方即使
+  // 绕过 schema、手动构造 LoopConfig，本函数也能安全失败并给出明确错误。
   if (!modelConfig) {
     throw new Error(`Unknown activeModel: ${config.activeModel}`);
   }

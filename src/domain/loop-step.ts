@@ -46,9 +46,9 @@ export interface ReflectData {
 }
 
 /**
- * One LoopStep is one full OODA-inspired iteration, not one model request.
- * Today only `act` calls a model, but the typed slots let future planner or
- * reviewer Agents replace skeleton stages without changing the outer runner.
+ * 一个 `LoopStep` 表示一次完整的、受 OODA 启发的迭代，而不是一次模型请求。
+ * 当前只有 `act` 会调用模型，但这些类型化阶段槽位允许未来用 planner 或
+ * reviewer Agent 替换骨架阶段，而不必修改外层 runner。
  */
 export interface LoopStep {
   index: number;

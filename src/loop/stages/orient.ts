@@ -1,9 +1,8 @@
 import type { ObserveData, OrientData } from "../../domain/loop-step.js";
 
 /**
- * Skeleton orientation intentionally stays simple. The `source: skeleton`
- * marker lives in the stage envelope so readers never confuse this helper with
- * a model-produced analysis.
+ * 骨架版 orient 被有意保持简单。阶段外壳中的 `source: skeleton` 标记会明确
+ * 数据来源，避免阅读者把这个辅助函数误认为模型生成的分析。
  */
 export async function runOrient(observation: ObserveData): Promise<OrientData> {
   return {

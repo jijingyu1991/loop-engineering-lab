@@ -4,9 +4,9 @@ import { test } from "node:test";
 import { runConfiguredLoop } from "../../src/cli.js";
 
 /**
- * Live tests are opt-in because they consume paid API tokens and require a
- * credential. Unit tests still exercise all orchestration without networking;
- * this checkpoint proves the selected provider works end to end.
+ * 真实测试必须显式启用，因为它会消耗付费 API token，并且需要有效凭据。
+ * 单元测试会在不联网的情况下覆盖全部编排逻辑；这个检查点用于证明当前
+ * 选中的 provider 能够端到端工作。
  */
 test(
   "runs a live three-step loop through the configured model",

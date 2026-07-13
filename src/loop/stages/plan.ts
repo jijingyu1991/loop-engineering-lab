@@ -6,8 +6,8 @@ export interface PlanInput {
 }
 
 /**
- * The plan owns the business stop condition. The fixed three-iteration value
- * is learning-project skeleton data, not a safety rule hidden in the runner.
+ * plan 阶段负责定义业务停止条件。固定执行三轮只是学习项目的骨架数据，不是
+ * 隐藏在 runner 内部的安全规则；因此以后替换 planner 时可以显式改变该条件。
  */
 export async function runPlan(input: PlanInput): Promise<PlanData> {
   return {
