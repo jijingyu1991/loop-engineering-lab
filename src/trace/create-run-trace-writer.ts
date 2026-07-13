@@ -1,6 +1,7 @@
 import {
   mkdir,
   readdir,
+  rm,
   stat,
   unlink,
   writeFile,
@@ -74,6 +75,11 @@ export async function createRunTraceWriter(
   const tracePath = join(directory, `${prefix}-${timestamp}${extension}`);
 
   await mkdir(directory, { recursive: true });
+
+  // Earlier versions appended every run to the unsuffixed base file. It cannot
+  // represent one-run-per-file retention, so remove it once during migration.
+  // `force` makes subsequent runs a no-op when that legacy file is absent.
+  await rm(options.basePath, { force: true });
   await writeFile(tracePath, "", { flag: "wx" });
   await pruneTraceFiles({ directory, prefix, extension, maxFiles });
 

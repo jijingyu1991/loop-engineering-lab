@@ -216,6 +216,11 @@ in retention. A failed or interrupted run still owns a trace file and counts
 toward the 20-run limit because partial failure evidence is useful for
 debugging.
 
+The legacy aggregate file at the exact configured base path (for example,
+`traces/loop.jsonl`) is removed when the per-run writer is created. It cannot be
+mapped reliably to one run and would otherwise bypass the 20-run retention
+model.
+
 Representative events are:
 
 - `loop_started`

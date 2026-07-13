@@ -80,8 +80,9 @@ CLI 最终会输出：
 
 每次运行都会生成独立文件，例如
 `traces/loop-2026-07-13T08-30-00-123Z.jsonl`。目录只保留最新 20 次运行，
-更早的 `loop-*.jsonl` 会自动删除；`.gitkeep` 和其他文件不会被清理。每一行都是
-独立 JSON 事件，可以看到：
+更早的 `loop-*.jsonl` 会自动删除；`.gitkeep` 和其他文件不会被清理。旧版本的
+聚合文件 `traces/loop.jsonl` 会在首次运行新版本时删除，避免它绕过“最近 20 次
+运行”的限制。每个新文件都由独立 JSON 事件组成，可以看到：
 
 - Loop 启动时的 task 和逻辑模型名；
 - 每轮七个阶段的 started/completed/failed/skipped 顺序；

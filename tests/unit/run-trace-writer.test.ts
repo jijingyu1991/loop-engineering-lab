@@ -31,6 +31,20 @@ test("creates a timestamped file from the configured base path", async () => {
   assert.equal(await exists(result.tracePath), true);
 });
 
+test("removes the legacy aggregate base file during migration", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "loop-trace-legacy-"));
+  const basePath = join(directory, "loop.jsonl");
+  await writeFile(basePath, "legacy aggregate trace\n", "utf8");
+
+  await createRunTraceWriter({
+    basePath,
+    maxFiles: 20,
+    now: () => new Date("2026-07-13T08:30:00.123Z"),
+  });
+
+  assert.equal(await exists(basePath), false);
+});
+
 test("keeps only the newest 20 matching traces and preserves other files", async () => {
   const directory = await mkdtemp(join(tmpdir(), "loop-trace-retention-"));
   const oldestPath = join(directory, "loop-oldest.jsonl");
