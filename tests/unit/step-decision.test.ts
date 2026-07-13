@@ -52,7 +52,7 @@ test("stages return the current default route", async () => {
   });
 
   const runner = {
-    run: async () => ({ finalOutput: "Agent result" }),
+    run: async () => ({ finalOutput: "Agent result", interruptions: [] }),
   } as unknown as Runner;
   const action = await runAct({
     runner,

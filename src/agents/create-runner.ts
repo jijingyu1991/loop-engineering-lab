@@ -14,5 +14,16 @@ export function createRunner(modelConfig: ModelConfig, apiKey: string): Runner {
      * exporter，也能保证学习和排查时只需理解一套 trace。
      */
     tracingDisabled: true,
+    // SDK 默认把审批拒绝降级成普通文本。这里取回 `state.reject(..., { message })`
+    // 保存的 JSON contract，使模型能继续按统一的 retry/user-action 字段决策。
+    toolErrorFormatter: ({
+      kind,
+      toolName,
+      callId,
+      runContext,
+    }) =>
+      kind === "approval_rejected"
+        ? runContext.getRejectionMessage(toolName, callId)
+        : undefined,
   });
 }
