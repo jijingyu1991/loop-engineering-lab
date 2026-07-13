@@ -203,6 +203,19 @@ The first version performs one real model call per outer step. A three-step run 
 
 The JSONL trace is append-only. Events contain timestamps, loop-step indexes, stage names, stage status, result source, and sanitized data.
 
+Each Loop run writes to its own file instead of appending all runs to one
+permanent file. The configured `tracePath` remains a naming template: for
+`traces/loop.jsonl`, a run creates a file such as
+`traces/loop-2026-07-13T08-30-00-123Z.jsonl`. Colons are replaced so names are
+portable across common filesystems.
+
+After the current run file is created, the trace directory is pruned by file
+modification time. Only the newest 20 matching JSONL files are retained; older
+matching files are deleted. `.gitkeep` and unrelated files are never included
+in retention. A failed or interrupted run still owns a trace file and counts
+toward the 20-run limit because partial failure evidence is useful for
+debugging.
+
 Representative events are:
 
 - `loop_started`
@@ -213,6 +226,11 @@ Representative events are:
 - `loop_stopped`
 
 The final event includes `status`, `stopReason`, and `completedSteps`. API keys, authorization headers, and raw credential-bearing request objects are never included.
+
+The Agents SDK global trace provider is disabled during application assembly
+with `setTracingDisabled(true)`. This prevents background uploads to OpenAI's
+trace endpoint for both GPT and OpenAI-compatible providers. The setting does
+not disable the project's local JSONL trace writer.
 
 ## Error Handling
 
@@ -296,6 +314,9 @@ Unit tests cover pure behavior without network access:
 - Plan-produced stop-condition propagation into verify and stop.
 - Stop priority and reason mapping.
 - JSONL trace order and final stop reason.
+- One-file-per-run naming and retention of only the newest 20 run files.
+- Disabling the Agents SDK global trace provider without disabling local trace
+  writes.
 
 The live integration checkpoint uses a real API key and does not mock the `act` stage:
 
