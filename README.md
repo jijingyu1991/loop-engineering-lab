@@ -6,11 +6,15 @@
 
 ## 当前实现
 
-每一轮 `LoopStep` 固定执行七个阶段：
+每一轮 `LoopStep` 当前由各阶段返回的 `StepDecision` 形成以下默认路径：
 
 ```text
 observe → orient → plan → act → verify → reflect → stop
 ```
+
+阶段会同时返回业务数据和下一阶段决策，例如 plan 返回
+`{ nextStep: "act", reason: "plan_completed" }`。`runLoopStep` 只负责执行决策，
+因此未来可以在阶段内部升级为条件跳转，而不需要重写协调器。
 
 - `observe` 从 task 和上一轮结果构造上下文。
 - `orient` 当前使用明确标记的 skeleton 数据。
@@ -134,7 +138,7 @@ RUN_LIVE_LOOP=1 npm run test:integration
 建议按以下顺序学习：
 
 1. `src/domain/loop-step.ts`：理解 LoopStep 和七阶段数据结构。
-2. `src/loop/run-loop-step.ts`：理解一轮如何按顺序执行、失败时如何 skip。
+2. `src/loop/run-loop-step.ts`：理解一轮如何消费阶段决策、失败时如何 skip。
 3. `src/loop/loop-runner.ts`：理解外层循环和终态写入。
 4. `src/loop/stages/stop.ts`：理解业务成功与安全限制的优先级。
 5. `src/agents/`：理解配置如何变成 Agents SDK provider、runner 和 Agent。
