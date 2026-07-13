@@ -79,3 +79,28 @@ test("classifies Agents SDK maxTurns failure and still records stop", async () =
   assert.equal(state.steps[0]?.reflect.status, "skipped");
   assert.equal(state.steps[0]?.stop.status, "completed");
 });
+
+test("follows an action decision that jumps directly to stop", async () => {
+  const traceWriter = new MemoryTraceWriter();
+
+  const state = await runLoop({
+    task: "Stop after the first action",
+    activeModel: "gpt",
+    maxSteps: 1,
+    maxTurns: 5,
+    traceWriter,
+    act: async () => ({
+      data: { output: "Enough evidence to stop" },
+      decision: {
+        nextStep: "stop",
+        reason: "action_requested_stop",
+      },
+    }),
+  });
+
+  assert.equal(state.steps.length, 1);
+  assert.equal(state.steps[0]?.act.status, "completed");
+  assert.equal(state.steps[0]?.verify.status, "skipped");
+  assert.equal(state.steps[0]?.reflect.status, "skipped");
+  assert.equal(state.steps[0]?.stop.status, "completed");
+});
