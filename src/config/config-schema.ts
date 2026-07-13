@@ -12,6 +12,62 @@ export const modelConfigSchema = z.object({
   api: z.enum(["responses", "chat_completions"]),
 });
 
+const executableRuleSchema = z.object({
+  executable: z.string().min(1),
+  argsPrefix: z.array(z.string()).default([]),
+});
+
+const defaultAllowedExecutables = [
+  { executable: "node", argsPrefix: [] },
+  { executable: "npm", argsPrefix: ["test"] },
+  { executable: "npm", argsPrefix: ["run", "build"] },
+  { executable: "git", argsPrefix: ["status"] },
+  { executable: "rg", argsPrefix: [] },
+];
+
+const defaultApprovalRequiredExecutables = [
+  { executable: "npm", argsPrefix: ["install"] },
+  { executable: "git", argsPrefix: ["push"] },
+];
+
+const shellToolConfigSchema = z
+  .object({
+    allowedExecutables: z
+      .array(executableRuleSchema)
+      .default(defaultAllowedExecutables),
+    approvalRequiredExecutables: z
+      .array(executableRuleSchema)
+      .default(defaultApprovalRequiredExecutables),
+    timeoutMs: z.number().int().positive().default(10_000),
+    maxOutputChars: z.number().int().positive().default(20_000),
+  })
+  .prefault({});
+
+const toolsConfigSchema = z
+  .object({
+    workspaceRoot: z.string().min(1).default("."),
+    shell: shellToolConfigSchema,
+    search: z
+      .object({
+        maxMatches: z.number().int().positive().default(200),
+        maxOutputChars: z.number().int().positive().default(20_000),
+      })
+      .prefault({}),
+    file: z
+      .object({
+        maxReadChars: z.number().int().positive().default(100_000),
+      })
+      .prefault({}),
+  })
+  .prefault({});
+
+function isPrefix(left: string[], right: string[]): boolean {
+  return (
+    left.length <= right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 export const loopConfigSchema = z
   .object({
     activeModel: z.string().min(1),
@@ -21,6 +77,7 @@ export const loopConfigSchema = z
       maxTurns: z.number().int().positive(),
     }),
     tracePath: z.string().min(1),
+    tools: toolsConfigSchema,
   })
   .superRefine((value, context) => {
     if (!value.models[value.activeModel]) {
@@ -29,6 +86,28 @@ export const loopConfigSchema = z
         path: ["activeModel"],
         message: `Unknown activeModel: ${value.activeModel}`,
       });
+    }
+
+    for (const allowed of value.tools.shell.allowedExecutables) {
+      for (const approval of value.tools.shell.approvalRequiredExecutables) {
+        if (
+          allowed.executable === approval.executable &&
+          (isPrefix(allowed.argsPrefix, approval.argsPrefix) ||
+            isPrefix(approval.argsPrefix, allowed.argsPrefix))
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["tools", "shell"],
+            message: [
+              "Ambiguous shell permission rules:",
+              allowed.executable,
+              allowed.argsPrefix.join(" "),
+              "overlaps",
+              approval.argsPrefix.join(" "),
+            ].join(" "),
+          });
+        }
+      }
     }
   });
 

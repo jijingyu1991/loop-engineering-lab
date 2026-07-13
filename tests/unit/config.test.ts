@@ -5,6 +5,7 @@ import {
   parseLoopConfig,
   resolveActiveModel,
 } from "../../src/config/config-schema.js";
+import { createToolRuntimeConfig } from "../../src/agents/tools/tool-runtime-config.js";
 
 const validConfig = {
   activeModel: "gpt",
@@ -56,4 +57,50 @@ test("names the missing environment variable without exposing a value", () => {
     () => resolveActiveModel(parsed, {}),
     /Missing API key environment variable: OPENAI_API_KEY/,
   );
+});
+
+test("defaults tool configuration for legacy config files", () => {
+  const parsed = parseLoopConfig(validConfig);
+
+  assert.equal(parsed.tools.workspaceRoot, ".");
+  assert.deepEqual(parsed.tools.shell.allowedExecutables, [
+    { executable: "node", argsPrefix: [] },
+    { executable: "npm", argsPrefix: ["test"] },
+    { executable: "npm", argsPrefix: ["run", "build"] },
+    { executable: "git", argsPrefix: ["status"] },
+    { executable: "rg", argsPrefix: [] },
+  ]);
+  assert.deepEqual(parsed.tools.shell.approvalRequiredExecutables, [
+    { executable: "npm", argsPrefix: ["install"] },
+    { executable: "git", argsPrefix: ["push"] },
+  ]);
+});
+
+test("rejects an allow rule that shadows an approval rule", () => {
+  assert.throws(
+    () =>
+      parseLoopConfig({
+        ...validConfig,
+        tools: {
+          shell: {
+            allowedExecutables: [{ executable: "git", argsPrefix: [] }],
+            approvalRequiredExecutables: [
+              { executable: "git", argsPrefix: ["push"] },
+            ],
+          },
+        },
+      }),
+    /Ambiguous shell permission rules/,
+  );
+});
+
+test("resolves the configured workspace from the process working directory", () => {
+  const parsed = parseLoopConfig({
+    ...validConfig,
+    tools: { workspaceRoot: "project" },
+  });
+
+  const runtime = createToolRuntimeConfig(parsed, "/tmp/loop-lab");
+
+  assert.equal(runtime.workspaceRoot, "/tmp/loop-lab/project");
 });
