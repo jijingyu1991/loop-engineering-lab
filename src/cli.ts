@@ -9,7 +9,7 @@ import { loadLoopConfig } from "./config/load-config.js";
 import type { LoopState } from "./domain/loop-state.js";
 import { runLoop } from "./loop/loop-runner.js";
 import { runAct } from "./loop/stages/act.js";
-import { JsonlTraceWriter } from "./trace/jsonl-trace-writer.js";
+import { createRunTraceWriter } from "./trace/create-run-trace-writer.js";
 
 /**
  * Compose infrastructure once, then hand the loop small dependencies. This is
@@ -23,9 +23,10 @@ export async function runConfiguredLoop(
   const loaded = await loadLoopConfig(configPath, process.env);
   const runner = createRunner(loaded.modelConfig, loaded.apiKey);
   const agent = createActorAgent(loaded.modelConfig);
-  const traceWriter = new JsonlTraceWriter(
-    resolve(process.cwd(), loaded.config.tracePath),
-  );
+  const { writer: traceWriter } = await createRunTraceWriter({
+    basePath: resolve(process.cwd(), loaded.config.tracePath),
+    maxFiles: 20,
+  });
 
   return runLoop({
     task,

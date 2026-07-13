@@ -78,7 +78,10 @@ CLI 最终会输出：
 }
 ```
 
-完整过程追加写入 `traces/loop.jsonl`。每一行都是独立 JSON 事件，可以看到：
+每次运行都会生成独立文件，例如
+`traces/loop-2026-07-13T08-30-00-123Z.jsonl`。目录只保留最新 20 次运行，
+更早的 `loop-*.jsonl` 会自动删除；`.gitkeep` 和其他文件不会被清理。每一行都是
+独立 JSON 事件，可以看到：
 
 - Loop 启动时的 task 和逻辑模型名；
 - 每轮七个阶段的 started/completed/failed/skipped 顺序；
