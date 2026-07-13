@@ -15,7 +15,7 @@
     }
   },
   "safetyLimits": {
-    "maxSteps": 2,
+    "maxSteps": 3,
     "maxTurns": 5
   },
   "tracePath": "traces/loop.jsonl"
