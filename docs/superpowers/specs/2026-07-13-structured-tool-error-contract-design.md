@@ -52,6 +52,7 @@ export interface ToolError {
 - `permission_denied`
 - `conflict`
 - `command_not_allowed`
+- `approval_rejected`
 - `dependency_missing`
 - `timeout`
 - `process_failed`
@@ -75,7 +76,7 @@ timeout 可以标记为可重试；路径越界、命令未授权、输入错误
 
 配置新增可选的 `tools` 节点。`tools.workspaceRoot` 是文件、搜索和 shell 共同使用的
 全局权限根，可配置，缺省为 `process.cwd()`。相对值也基于 `process.cwd()` 解析。
-shell allowlist、超时和输出上限同样集中在该节点，避免各工具拥有不一致的安全配置。
+shell 权限规则、超时和输出上限同样集中在该节点，避免各工具拥有不一致的安全配置。
 
 建议的首版配置为：
 
@@ -84,7 +85,17 @@ shell allowlist、超时和输出上限同样集中在该节点，避免各工�
   "tools": {
     "workspaceRoot": ".",
     "shell": {
-      "allowedExecutables": ["node", "npm", "git", "rg"],
+      "allowedExecutables": [
+        { "executable": "node", "argsPrefix": [] },
+        { "executable": "npm", "argsPrefix": ["test"] },
+        { "executable": "npm", "argsPrefix": ["run", "build"] },
+        { "executable": "git", "argsPrefix": ["status"] },
+        { "executable": "rg", "argsPrefix": [] }
+      ],
+      "approvalRequiredExecutables": [
+        { "executable": "npm", "argsPrefix": ["install"] },
+        { "executable": "git", "argsPrefix": ["push"] }
+      ],
       "timeoutMs": 10000,
       "maxOutputChars": 20000
     },
@@ -100,7 +111,14 @@ shell allowlist、超时和输出上限同样集中在该节点，避免各工�
 ```
 
 Schema 为缺失的 `tools` 节点和子字段提供上述默认值。CLI 只解析一次绝对
-`workspaceRoot`，再把同一份 `ToolRuntimeConfig` 注入全部工具。
+`workspaceRoot`，再把同一份 `ToolRuntimeConfig` 注入全部工具。缺省规则保持学习项目的
+离线开发路径可用：文件读写与搜索自动允许；安全的只读或验证命令自动允许；安装依赖、
+推送等会改变外部或依赖状态的命令需要用户确认。未匹配任一 shell 规则的调用拒绝。
+
+权限判断在概念上统一返回 `allowed`、`approval_required` 或 `denied`。文件和搜索首版
+在通过 workspace 路径校验后返回 `allowed`；只有部分 shell 规则返回
+`approval_required`。`workspaceRoot` 是不可提升的硬边界：workspace 外调用始终是
+`denied`，用户批准也不能绕过。
 
 路径防护不能只做字符串前缀判断。已有目标通过 `realpath` 检查符号链接解析后的真实
 路径仍位于 workspace；写入新文件时检查最近的已存在父目录的真实路径。输入中的绝对
@@ -113,6 +131,7 @@ evidence 只使用 workspace 相对路径，不暴露宿主机绝对路径。
 
 - `src/agents/tools/tool-result.ts` 定义结果、错误和 evidence 类型，并提供小型错误工厂；
 - `src/agents/tools/tool-runtime-config.ts` 表示 CLI 已解析的全局工具运行配置；
+- `src/agents/tools/tool-permission.ts` 定义三态权限结果并匹配 executable/参数前缀规则；
 - `src/agents/tools/resolve-workspace-path.ts` 独占路径解析与真实路径边界检查；
 - `src/agents/tools/file-tool.ts` 实现文件执行器及 SDK adapter；
 - `src/agents/tools/search-tool.ts` 实现基于 `rg` 的搜索执行器及 SDK adapter；
@@ -135,7 +154,9 @@ model tool call
 ```
 
 CLI 必须先创建 trace writer，再创建 tools 和 Agent。`createActorAgent` 接收已经组装好的
-tools，不直接读取配置或构造文件系统依赖，保持 composition root 清晰。
+tools，不直接读取配置或构造文件系统依赖，保持 composition root 清晰。`runAct` 接收
+一个可注入的 approval handler：CLI 版本通过 `node:readline/promises` 展示相对 cwd、
+executable 和参数，并读取一次批准或拒绝；测试版本使用确定性 handler，不读取 stdin。
 
 ## 文件工具
 
@@ -168,10 +189,13 @@ tools，不直接读取配置或构造文件系统依赖，保持 composition ro
 
 shell 工具输入为 `executable`、`args: string[]` 和可选 workspace 相对 `cwd`。实现使用
 `spawn(executable, args, { shell: false })`，不支持管道、重定向、命令替换或任意 shell
-字符串。
+字符串。每条权限规则由 `{ executable, argsPrefix }` 构成；空 `argsPrefix` 匹配该
+executable 的全部参数，非空前缀只匹配对应子命令。配置解析拒绝 allowed 与
+approval-required 中相同或有歧义的规则，避免审批被宽泛 allow 规则遮蔽。
 
-- executable 必须与 `allowedExecutables` 中的精确名称匹配，否则返回
-  `command_not_allowed`；
+- 匹配 `allowedExecutables` 的调用直接执行；
+- 匹配 `approvalRequiredExecutables` 的调用使用 Agents SDK `needsApproval` 中断；
+- 未匹配任一规则的调用返回 `command_not_allowed`；
 - cwd 必须位于全局 workspaceRoot；
 - 参数保持数组边界原样传递，不经过 shell 解释；
 - timeout 到达后终止子进程并返回可重试的 `timeout`；
@@ -179,22 +203,34 @@ shell 工具输入为 `executable`、`args: string[]` 和可选 workspace 相对
 - executable 在运行环境中不存在时返回 `dependency_missing`；
 - 输出超过限制时终止子进程并返回 `output_limit_exceeded`。
 
+权限判断先校验 workspace，再匹配命令规则。因此 workspace 外调用直接返回
+`path_outside_workspace`，不会产生批准提示。对于需要确认的调用，`runAct` 从首次
+`Runner.run()` 取得 interruption，调用 `state.approve()` 或 `state.reject()`，随后用
+同一 state 恢复 Runner。批准只对当前调用生效，不设置 `alwaysApprove`。拒绝时传给
+模型的是 `approval_rejected` 的 JSON error contract，而不是 SDK 默认文本。
+
 应用层约束保证直接工具输入不指定 workspace 外 cwd，也不调用未授权 executable。某个
 已授权程序自身若提供访问外部资源的功能，仍属于该程序的能力边界；首版不宣称提供
 操作系统级 sandbox。
 
 ## Trace 协议
 
-`TraceEvent` 增加三类事件：
+`TraceEvent` 增加五类事件：
 
 - `tool_started`：timestamp、tool、operation 和清理后的 input summary；
 - `tool_completed`：timestamp、tool、durationMs 和成功 evidence；
-- `tool_failed`：timestamp、tool、durationMs，以及完整结构化 `ToolError`。
+- `tool_failed`：timestamp、tool、durationMs，以及完整结构化 `ToolError`；
+- `tool_approval_requested`：timestamp、tool、相对 cwd 和清理后的命令摘要；
+- `tool_approval_resolved`：timestamp、tool、`approved` 布尔值和当前调用标识。
 
 `tool_failed.error.retryable`、`type`、`userActionRequired`、`suggestedNextStep` 和
 `evidence` 是 retry 审计依据。模型可见结果与 trace 事件引用同一个错误值，避免两个
 分类路径逐渐漂移。现有 stage trace 保持不变；工具失败是 act 内的可处理结果，不自动
 升级为 `stage_failed`。
+
+需要确认的调用在执行前先写 `tool_approval_requested`。批准或拒绝后写
+`tool_approval_resolved`；拒绝还写 `tool_failed`，其 `approval_rejected` error 与模型
+看到的结构一致。这样 trace 能区分“策略拒绝”“用户拒绝”和“执行后失败”。
 
 ## 失败处理原则
 
@@ -213,6 +249,8 @@ stage 失败流程停止运行，而不是伪造一个可重试的业务工具�
 - 通过符号链接读取或写入 workspace 外目标被拒绝；
 - search 匹配、无匹配、无效正则、输出上限和相对路径；
 - shell allowlist、参数数组、相对 cwd、非零退出、timeout、缺失 executable 和输出上限；
+- shell 自动允许、请求批准、批准后恢复、拒绝后结构化返回，以及未匹配规则时拒绝；
+- workspace 外调用不产生 approval request，且批准不能扩大 workspace 边界；
 - 每种工具失败都向 Agent 返回完整 error contract；
 - `tool_failed` trace 包含与返回值一致的 retry 依据；
 - Actor Agent 注册文件、搜索和 shell 三个工具；
@@ -232,6 +270,7 @@ npm run build
 1. Agent 的每个工具失败输出都是可判别 JSON 结构，而不是裸 `stderr` 或异常文本。
 2. 每个错误都包含 type、retryable、user action required、suggested next step 和 evidence。
 3. 文件、搜索和 shell 共享一个可配置、默认当前目录的 workspace 权限根。
-4. shell 仅执行 allowlist 中的程序并使用参数数组。
+4. shell 仅执行自动允许或经当次用户批准的 executable/参数前缀规则，并使用参数数组。
 5. retryable 及其分类证据写入 JSONL trace，并与 Agent 所见错误一致。
-6. 离线单元测试和 TypeScript build 通过。
+6. workspace 外调用始终拒绝，用户批准不能扩大 workspace 权限根。
+7. 离线单元测试和 TypeScript build 通过。
