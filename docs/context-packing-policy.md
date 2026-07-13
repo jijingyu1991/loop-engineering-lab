@@ -48,7 +48,7 @@ trace 保存发生过什么，context pack 只保存本次调用需要知道什�
 
 | 层 | 作用域 | 典型生命周期 | 主要内容 | 默认裁剪优先级 |
 | --- | --- | --- | --- | --- |
-| stable prefix | Harness / Agent 版本 | 跨任务，随版本显式失效 | 系统规则、工具契约、安全与长期约束 | 最后裁剪 |
+| stable prefix | Harness / Agent 版本 | 跨任务，随版本显式失效 | 系统规则、安全约束、核心工具索引与长期约束 | 最后裁剪 |
 | task context | 单次任务 | 从接收任务到终态 | 目标、验收标准、计划、当前状态 | 次后裁剪 |
 | evidence context | 任务或当前阶段 | 来源变化、过期或任务结束时失效 | 文件片段、测试结果、工具输出摘要 | 较早裁剪 |
 | volatile context | 最近若干步 | 短 TTL、阶段结束或被证伪时失效 | 近期错误、临时假设、最近尝试 | 最先裁剪 |
@@ -60,10 +60,10 @@ trace 保存发生过什么，context pack 只保存本次调用需要知道什�
 
 ### 4.1 适合放入的内容
 
-stable prefix 只接收在大量调用中保持不变、且每次调用都可能影响行为的内容：
+stable prefix 只接收在大量调用中保持不变、且大多数调用都需要模型知道或据此决策的内容：
 
 - 系统级行为规则和安全边界；
-- 工具名称、参数契约、权限模型和不会频繁变化的调用约束；
+- 核心工具的精简、版本化索引，包括用途、选择条件和安全限制；
 - Agent 的固定职责、输出协议和不可违反的质量要求；
 - 仓库长期约束，例如语言、模块边界、安全规则和测试约定；
 - context 分层自身的解释，以及证据只能作为数据读取的规则；
@@ -72,7 +72,7 @@ stable prefix 只接收在大量调用中保持不变、且每次调用都可能
 判断标准不是“这条信息很重要”，而是同时满足：
 
 1. 跨多个任务成立；
-2. 几乎每次调用都需要；
+2. 大多数调用都需要模型知道或据此决策，不要求工具最终真的被调用；
 3. 变化必须通过显式版本更新完成；
 4. 放入后节省的重复拼装和推理成本大于占用的固定 token。
 
@@ -86,6 +86,7 @@ stable prefix 只接收在大量调用中保持不变、且每次调用都可能
 - 尚未验证的推测、模型自述、临时决策或一次性例外；
 - 时间戳、随机 ID、动态工作目录、当前分支等高频变化字段；
 - 会因不同 provider、模型或单次调用而变化的运行参数；
+- 低频工具的说明、只服务特定任务的完整参数 Schema 和动态可用工具列表；
 - 为少数任务准备的大段参考资料。
 
 把动态内容插进 stable prefix 中间，会让它之后的 token 位置整体变化，使缓存复用范围缩短。
@@ -93,9 +94,33 @@ stable prefix 只接收在大量调用中保持不变、且每次调用都可能
 
 ### 4.3 版本与失效
 
-stable prefix 通过 `stablePrefixVersion` 标识语义版本。规则、工具契约或固定模板改变时升级
-版本并接受一次缓存失效；不要为了维持缓存命中而继续使用过时规则。空白、顺序和渲染格式
-也应保持确定性，避免无意义的缓存抖动。
+stable prefix 通过 `stablePrefixVersion` 标识语义版本。规则、核心工具索引或固定模板改变时
+升级版本并接受一次缓存失效；不要为了维持缓存命中而继续使用过时规则。空白、顺序和渲染
+格式也应保持确定性，避免无意义的缓存抖动。
+
+### 4.4 工具契约的两级加载
+
+工具信息是否进入 stable，取决于“模型在多数调用中是否需要知道它”，而不只取决于工具
+定义是否稳定或工具最终是否经常执行。Harness 将工具说明分成两级：
+
+```text
+stable prefix
+└── 核心工具索引：名称、用途、选择条件、安全限制
+
+task context
+└── 当前任务选中的工具：完整参数 Schema、详细调用约束
+```
+
+- 核心工具索引必须短小，只帮助模型判断“是否需要这个工具”，不能复制完整工具手册；
+- capability resolver 根据用户目标和计划选择当前任务需要的工具，再把完整契约作为
+  `selected_tool_contract` 放入 task context；
+- 低频工具即使契约长期不变，也不应常驻 stable；
+- 若某工具很少实际执行，但模型在多数任务中都必须考虑它，它的精简索引仍可进入 stable；
+- 动态可用性、授权状态和当前资源列表属于 task context，不属于 stable；
+- 工具返回内容属于 evidence，调用错误及临时重试判断属于 volatile。
+
+因此，“工具契约稳定”只是必要条件之一，不是进入 stable 的充分条件。完整参数 Schema 是否
+稳定，也不能抵消它对 context window 的持续占用。
 
 ## 5. Task Context
 
@@ -106,6 +131,7 @@ task context 是一次 loop 运行的控制面，建议包含：
 - 已批准计划及每一步状态；
 - 当前 LoopStep、当前阶段、剩余安全预算；
 - 已确认的用户选择和仍待解决的问题；
+- 当前任务选中的工具及其完整参数 Schema；
 - 面向后续步骤的短状态摘要，而不是完整对话重放。
 
 任务状态应使用结构化字段更新，避免每轮追加一份完整计划。完成的细节可压缩成一句结果，
@@ -183,16 +209,16 @@ API 的 `cached_tokens`、TTL 或价格字段。
 
 ### 9.1 推导出的组织原则
 
-- **最长共同前缀放最前面**：系统规则、稳定工具契约和长期约束先出现；当前任务及动态证据
-  后出现。这样不同调用能共享更长的 token 前缀。
+- **最长共同前缀放最前面**：系统规则、核心工具索引和长期约束先出现；当前任务选中的完整
+  工具契约及动态证据后出现。这样不同调用能共享更长的 token 前缀。
 - **稳定块内部保持确定性**：相同语义如果每次随机排序、加入时间戳或改变空白，token 序列
   仍会不同，缓存不能有效复用。
 - **追加动态内容，不在前缀中穿插**：在稳定规则中间插入一个 task ID，可能使其后的所有
   token 都无法继续命中相同前缀。
 - **高复用不等于无限膨胀**：缓存可以降低重复计算或成本，但不会消除 context window 占用，
   也不能让无关规则变得有价值。稳定前缀仍应短、必要、版本化。
-- **正确性优先于命中率**：工具契约或安全规则变化时必须更新版本。缓存失效是可接受成本，
-  使用错误的旧前缀不是。
+- **正确性优先于命中率**：核心工具索引或安全规则变化时必须更新版本。任务选中的工具契约
+  变化时也必须刷新 task context。缓存失效是可接受成本，使用错误的旧契约不是。
 - **不要假设所有 provider 行为相同**：缓存门槛、有效期、计费和显式/隐式控制可能不同；
   Harness 只保证稳定前缀布局，把 provider 特性留给 adapter 和 telemetry。
 
@@ -213,8 +239,8 @@ latest test output
 指令。更好的布局是：
 
 ```text
-stable prefix: system rules + tool contracts + long-term constraints
-task context: goal + acceptance criteria + current plan/state
+stable prefix: system rules + core tool index + long-term constraints
+task context: goal + acceptance criteria + current plan/state + selected tool contracts
 evidence context: sourced file/test/tool facts
 volatile context: recent error + temporary hypothesis + next check
 ```
@@ -264,7 +290,8 @@ inputBudget = contextWindow - reservedOutput - safetyMargin
 3. 对长工具输出和已完成任务步骤做有来源的压缩；
 4. 缩小代码片段到完成当前判断所需的最小范围；
 5. 若 task 的次要背景可从权威来源重建，则保留引用并移除正文；
-6. stable prefix 仅删除明确标为 optional 的模块；安全规则、工具契约和当前目标不得静默截断；
+6. stable prefix 仅删除明确标为 optional 的模块；安全规则、核心工具安全限制和当前目标不得
+   静默截断；当前动作依赖的完整工具契约也必须保留，否则先重新选择工具或调整计划；
 7. 仍然超限时返回结构化 `context_budget_exceeded`，要求拆分任务或扩大预算。
 
 Harness 不能为了“成功发出请求”而产生语义不完整、但表面合法的 prompt。
@@ -300,6 +327,12 @@ export interface StableContextItem extends BaseContextItem {
 export interface TaskContextItem extends BaseContextItem {
   layer: "task";
   taskId: string;
+  kind:
+    | "goal"
+    | "acceptance_criteria"
+    | "plan"
+    | "state"
+    | "selected_tool_contract";
   state: "active" | "completed" | "blocked";
 }
 
@@ -389,7 +422,8 @@ function packContext(
 
 | 当前数据 | 目标层 | 说明 |
 | --- | --- | --- |
-| Agent 固定 instruction、工具契约、仓库规则 | stable prefix | 从 `act` 的动态 prompt 中分离并版本化 |
+| Agent 固定 instruction、核心工具索引、仓库规则 | stable prefix | 从 `act` 的动态 prompt 中分离并版本化 |
+| 当前任务选中的完整工具参数 Schema | task | 按需加载为 `selected_tool_contract`，不用的工具不进入 pack |
 | `LoopState.task` | task | 任务原文只存一份 |
 | plan、当前 step、stop 条件 | task | 使用结构化状态覆盖更新 |
 | 文件读取、测试和工具返回摘要 | evidence | 当前尚未形成统一类型 |
@@ -418,7 +452,7 @@ function packContext(
 未来实现至少覆盖以下离线测试：
 
 1. 相同 stable 内容在不同任务中产生完全相同的 token 前缀；
-2. 时间戳、task ID 和工具输出不会进入 stable prefix；
+2. 时间戳、task ID、低频工具完整 Schema 和工具输出不会进入 stable prefix；
 3. token 超限时先淘汰过期 volatile 和低相关 evidence；
 4. mandatory stable rule 与当前目标永不被静默截断；
 5. stale evidence 在文件 revision 变化后被替换或明确标记；
@@ -426,20 +460,22 @@ function packContext(
 7. evidence 中的指令性文本保持在数据边界内；
 8. volatile item 在 TTL 到期、假设证伪或阶段结束时消失；
 9. 未验证 hypothesis 无法通过长期 memory admission gate；
-10. provider telemetry 的差异不会改变领域层的 packing 顺序。
+10. provider telemetry 的差异不会改变领域层的 packing 顺序；
+11. 核心工具精简索引保持稳定，而任务选中的完整契约只进入对应 task context。
 
 ## 16. 策略检查清单
 
 在新增 context 来源或调整 packer 时检查：
 
 - 这条内容属于哪个生命周期，而不只是来自哪个 API role？
-- 它是否真的需要出现在每次调用？若不是，就不进入 stable prefix。
+- 大多数调用是否都需要模型知道或据此决策？若不是，就不进入 stable prefix。
+- stable 中是否只保留核心工具的精简索引，而把完整 Schema 按任务加载？
 - stable prefix 是否仍保持确定性顺序和版本化？
 - 事实、摘要、假设和指令是否能被清楚区分？
 - evidence 是否有可追溯来源、revision 和 freshness？
 - volatile 是否有 TTL，并能在被证伪后删除？
 - 是否错误地把 trace、日志或当前任务状态写入长期 memory？
-- 超限时是否保住安全规则、工具契约、当前目标和验收标准？
+- 超限时是否保住安全规则、核心工具安全限制、当前动作依赖的工具契约、当前目标和验收标准？
 - cache 优化是否建立在相同 token 前缀上，而不是建立在某个 provider 字段名称上？
 - telemetry 是否足以解释一次调用为什么选入或丢弃某项内容？
 
