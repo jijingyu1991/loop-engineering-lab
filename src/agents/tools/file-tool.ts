@@ -284,37 +284,51 @@ export function createFileTool(
     name: "workspace_file",
     description: "Read or atomically write a UTF-8 file inside the configured workspace.",
     parameters: fileToolParameters,
-    execute: async (input) => {
-      if (input.action === "write" && input.content === null) {
-        return {
-          ok: false,
-          error: createToolError({
-            type: "invalid_input",
-            message: "Write action requires content.",
-            retryable: false,
-            userActionRequired: false,
-            suggestedNextStep: "Provide string content for the write action.",
-            evidence: { tool: "file", operation: "write", path: input.path },
-          }),
-        };
-      }
-
-      const fileInput: FileToolInput = input.action === "read"
-        ? { action: "read", path: input.path }
-        : {
-            action: "write",
-            path: input.path,
-            content: input.content ?? "",
-            overwrite: input.overwrite,
-          };
-      return traceToolExecution({
+    execute: (input) =>
+      traceToolExecution({
         tool: "file",
         operation: input.action,
         inputSummary: { path: input.path, overwrite: input.overwrite },
         traceWriter,
-        execute: () => executeFileTool(fileInput, runtime),
-      });
-    },
-    errorFunction: () => JSON.stringify(adapterFailure()),
+        execute: () => {
+          if (input.action === "write" && input.content === null) {
+            return Promise.resolve({
+              ok: false as const,
+              error: createToolError({
+                type: "invalid_input",
+                message: "Write action requires content.",
+                retryable: false,
+                userActionRequired: false,
+                suggestedNextStep: "Provide string content for the write action.",
+                evidence: {
+                  tool: "file",
+                  operation: "write",
+                  path: input.path,
+                },
+              }),
+            });
+          }
+
+          const fileInput: FileToolInput = input.action === "read"
+            ? { action: "read", path: input.path }
+            : {
+                action: "write",
+                path: input.path,
+                content: input.content ?? "",
+                overwrite: input.overwrite,
+              };
+          return executeFileTool(fileInput, runtime);
+        },
+      }),
+    errorFunction: async () =>
+      JSON.stringify(
+        await traceToolExecution({
+          tool: "file",
+          operation: "adapter",
+          inputSummary: { validation: "failed" },
+          traceWriter,
+          execute: async () => adapterFailure(),
+        }),
+      ),
   });
 }

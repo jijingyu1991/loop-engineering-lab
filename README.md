@@ -19,7 +19,8 @@ observe → orient → plan → act → verify → reflect → stop
 - `observe` 从 task 和上一轮结果构造上下文。
 - `orient` 当前使用明确标记的 skeleton 数据。
 - `plan` 当前生成简单动作和“三轮完成”的业务停止条件。
-- `act` 使用 OpenAI Agents SDK 调用真实 GPT 或 DeepSeek API。
+- `act` 使用 OpenAI Agents SDK 调用真实 GPT 或 DeepSeek API，并可调用 workspace
+  文件、搜索和 shell 工具。
 - `verify` 当前是 skeleton verifier：第 3 轮才满足 plan 条件。
 - `reflect` 当前生成供下一轮使用的简单反馈。
 - `stop` 汇总 verify、执行错误和安全限制，决定继续、成功或失败。
@@ -65,6 +66,62 @@ DEEPSEEK_API_KEY=
 模型名、`baseURL`、API 类型和 Key 环境变量都在同一个配置表中。业务代码只读取
 `activeModel`，因此切换模型不需要修改 TypeScript。
 
+## 本地工具与 workspace 权限
+
+三个本地工具共享 `config/loop.config.json` 中的 `tools.workspaceRoot`。该字段可配置，
+缺省为启动进程的当前目录；相对值也基于当前目录解析。文件路径、搜索根目录和 shell
+cwd 都必须位于这个 workspace 内。`..`、绝对路径和指向 workspace 外的符号链接都会
+被拒绝，用户批准 shell 命令也不能扩大这个硬边界。
+
+- `workspace_file`：读取 UTF-8 文件，或原子写入文件；覆盖已有文件必须显式设置
+  `overwrite: true`。
+- `workspace_search`：使用 ripgrep 搜索 literal 或 regex；无匹配是成功空数组。
+- `workspace_shell`：只接受 `executable`、`args[]` 和相对 `cwd`，使用
+  `spawn(..., { shell: false })`，不解析管道、重定向或命令替换。
+
+shell 权限按 `{ executable, argsPrefix }` 匹配：
+
+- `allowedExecutables` 中的规则可以直接执行；
+- `approvalRequiredExecutables` 中的规则会暂停 Agent，在当前终端请求批准；
+- 未匹配任何规则的命令返回 `command_not_allowed`。
+
+例如 `git status` 默认允许，`git push ...` 默认需要批准。命令行会把提示写到 stderr：
+
+```text
+Shell approval required
+cwd: .
+command: git push origin main
+Allow this call? [y/N]
+```
+
+只有 `y` 或 `yes`（忽略大小写）表示批准；其他输入和 EOF 默认拒绝。非 TTY 环境不会
+阻塞，而是向 Agent 返回 `approval_required`，建议在交互式终端重跑。
+
+## 统一工具错误 contract
+
+工具失败是模型可见的 JSON 值，不是裸 stderr：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "timeout",
+    "message": "The command exceeded the configured timeout.",
+    "retryable": true,
+    "userActionRequired": false,
+    "suggestedNextStep": "Retry once or narrow the command workload.",
+    "evidence": {
+      "tool": "shell",
+      "operation": "execute",
+      "durationMs": 10000
+    }
+  }
+}
+```
+
+`retryable` 表示不改变输入、无需用户介入，再执行一次可能成功。工具内部不会自动重试；
+Agent 根据该字段和 evidence 决定下一步，避免隐藏文件写入或命令执行的重复副作用。
+
 ## 运行 Loop
 
 ```bash
@@ -91,6 +148,9 @@ CLI 最终会输出：
 - Loop 启动时的 task 和逻辑模型名；
 - 每轮七个阶段的 started/completed/failed/skipped 顺序；
 - 阶段数据来自 runtime、agent 还是 skeleton；
+- 每次工具调用的 `tool_started`、`tool_completed` 或 `tool_failed`；
+- shell 的 `tool_approval_requested` 与 `tool_approval_resolved`；
+- 工具失败时完整的 type、retryable、userActionRequired、suggestedNextStep 和 evidence；
 - 最终状态、完成轮数和停止原因。
 
 ## 两种“最大次数”
@@ -141,9 +201,10 @@ RUN_LIVE_LOOP=1 npm run test:integration
 2. `src/loop/run-loop-step.ts`：理解一轮如何消费阶段决策、失败时如何 skip。
 3. `src/loop/loop-runner.ts`：理解外层循环和终态写入。
 4. `src/loop/stages/stop.ts`：理解业务成功与安全限制的优先级。
-5. `src/agents/`：理解配置如何变成 Agents SDK provider、runner 和 Agent。
-6. `src/trace/`：理解 append-only JSONL trace。
-7. `src/cli.ts`：理解配置、Agent、Loop 和 trace 如何在入口处组装。
+5. `src/agents/tools/`：理解统一 ToolResult、workspace guard、权限与三个工具。
+6. `src/agents/`：理解配置如何变成 Agents SDK provider、runner 和 Agent。
+7. `src/trace/`：理解 append-only JSONL trace。
+8. `src/cli.ts`：理解配置、Agent、Loop、tools 和 trace 如何在入口处组装。
 
-未来添加 tools 和 guardrails 时放在 `src/agents/tools/` 与
-`src/agents/guardrails/`；`act` 只消费组装完成的 Agent，LoopRunner 不需要改变。
+未来添加 guardrails 时放在 `src/agents/guardrails/`；`act` 只消费组装完成的 Agent，
+LoopRunner 不需要理解具体工具实现。

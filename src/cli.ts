@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import { createActorAgent } from "./agents/create-agent.js";
 import { createRunner } from "./agents/create-runner.js";
 import { disableSdkTracing } from "./agents/disable-sdk-tracing.js";
+import { createTerminalApprovalHandler } from "./agents/terminal-approval-handler.js";
+import { createAgentTools } from "./agents/tools/create-agent-tools.js";
+import { createToolRuntimeConfig } from "./agents/tools/tool-runtime-config.js";
 import { loadLoopConfig } from "./config/load-config.js";
 import type { LoopState } from "./domain/loop-state.js";
 import { runLoop } from "./loop/loop-runner.js";
@@ -26,10 +29,18 @@ export async function runConfiguredLoop(
 
   const loaded = await loadLoopConfig(configPath, process.env);
   const runner = createRunner(loaded.modelConfig, loaded.apiKey);
-  const agent = createActorAgent(loaded.modelConfig);
   const { writer: traceWriter } = await createRunTraceWriter({
     basePath: resolve(process.cwd(), loaded.config.tracePath),
     maxFiles: 20,
+  });
+  const toolRuntime = createToolRuntimeConfig(loaded.config, process.cwd());
+  const tools = createAgentTools(toolRuntime, traceWriter);
+  const agent = createActorAgent(loaded.modelConfig, tools);
+  const approvalHandler = createTerminalApprovalHandler({
+    input: process.stdin,
+    // 审批提示写 stderr，避免破坏 stdout 中供脚本消费的最终 JSON。
+    output: process.stderr,
+    isTTY: Boolean(process.stdin.isTTY),
   });
 
   return runLoop({
@@ -39,7 +50,15 @@ export async function runConfiguredLoop(
     maxTurns: loaded.config.safetyLimits.maxTurns,
     traceWriter,
     act: ({ observation, plan, maxTurns }) =>
-      runAct({ runner, agent, observation, plan, maxTurns }),
+      runAct({
+        runner,
+        agent,
+        observation,
+        plan,
+        maxTurns,
+        traceWriter,
+        approvalHandler,
+      }),
   });
 }
 

@@ -335,6 +335,15 @@ export function createShellTool(
         // 通过同一执行路径。denied 与 workspace 越界仍由执行器再次防御。
         execute: () => executeShellTool(input, runtime, { approvalGranted: true }),
       }),
-    errorFunction: () => JSON.stringify(adapterFailure()),
+    errorFunction: async () =>
+      JSON.stringify(
+        await traceToolExecution({
+          tool: "shell",
+          operation: "adapter",
+          inputSummary: { validation: "failed" },
+          traceWriter,
+          execute: async () => adapterFailure(),
+        }),
+      ),
   });
 }

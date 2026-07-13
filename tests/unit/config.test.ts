@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
@@ -103,4 +104,31 @@ test("resolves the configured workspace from the process working directory", () 
   const runtime = createToolRuntimeConfig(parsed, "/tmp/loop-lab");
 
   assert.equal(runtime.workspaceRoot, "/tmp/loop-lab/project");
+});
+
+test("checked-in config declares global workspace and shell approval rules", async () => {
+  const raw = JSON.parse(
+    await readFile(
+      new URL("../../config/loop.config.json", import.meta.url),
+      "utf8",
+    ),
+  ) as unknown;
+  assert.ok(
+    typeof raw === "object" && raw !== null && "tools" in raw,
+    "checked-in config must declare tools explicitly",
+  );
+  const parsed = parseLoopConfig(raw);
+
+  assert.equal(parsed.tools.workspaceRoot, ".");
+  assert.ok(
+    parsed.tools.shell.allowedExecutables.some(
+      (rule) => rule.executable === "rg" && rule.argsPrefix.length === 0,
+    ),
+  );
+  assert.ok(
+    parsed.tools.shell.approvalRequiredExecutables.some(
+      (rule) =>
+        rule.executable === "git" && rule.argsPrefix.join(" ") === "push",
+    ),
+  );
 });

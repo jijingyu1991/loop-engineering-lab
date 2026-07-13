@@ -324,6 +324,15 @@ export function createSearchTool(
         traceWriter,
         execute: () => executeSearchTool(input, runtime),
       }),
-    errorFunction: () => JSON.stringify(adapterFailure()),
+    errorFunction: async () =>
+      JSON.stringify(
+        await traceToolExecution({
+          tool: "search",
+          operation: "adapter",
+          inputSummary: { validation: "failed" },
+          traceWriter,
+          execute: async () => adapterFailure(),
+        }),
+      ),
   });
 }

@@ -18,5 +18,30 @@
     "maxSteps": 3,
     "maxTurns": 5
   },
+  "tools": {
+    "workspaceRoot": ".",
+    "file": {
+      "maxReadChars": 100000
+    },
+    "search": {
+      "maxMatches": 200,
+      "maxOutputChars": 20000
+    },
+    "shell": {
+      "allowedExecutables": [
+        { "executable": "node", "argsPrefix": [] },
+        { "executable": "npm", "argsPrefix": ["test"] },
+        { "executable": "npm", "argsPrefix": ["run", "build"] },
+        { "executable": "git", "argsPrefix": ["status"] },
+        { "executable": "rg", "argsPrefix": [] }
+      ],
+      "approvalRequiredExecutables": [
+        { "executable": "npm", "argsPrefix": ["install"] },
+        { "executable": "git", "argsPrefix": ["push"] }
+      ],
+      "timeoutMs": 10000,
+      "maxOutputChars": 20000
+    }
+  },
   "tracePath": "traces/loop.jsonl"
 }
