@@ -1,9 +1,9 @@
 {
-  "activeModel": "gpt",
+  "activeModel": "deepseek",
   "models": {
     "gpt": {
-      "model": "gpt-5.4-mini",
-      "baseURL": "https://api.openai.com/v1",
+      "model": "gpt-5.4-nano-2026-03-17",
+      "baseURL": "https://api.uniapi.io/v1",
       "apiKeyEnv": "OPENAI_API_KEY",
       "api": "responses"
     },
@@ -15,7 +15,7 @@
     }
   },
   "safetyLimits": {
-    "maxSteps": 3,
+    "maxSteps": 2,
     "maxTurns": 5
   },
   "tracePath": "traces/loop.jsonl"
