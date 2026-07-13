@@ -52,6 +52,7 @@ export interface ToolError {
 - `permission_denied`
 - `conflict`
 - `command_not_allowed`
+- `approval_required`
 - `approval_rejected`
 - `dependency_missing`
 - `timeout`
@@ -158,6 +159,27 @@ tools，不直接读取配置或构造文件系统依赖，保持 composition ro
 一个可注入的 approval handler：CLI 版本通过 `node:readline/promises` 展示相对 cwd、
 executable 和参数，并读取一次批准或拒绝；测试版本使用确定性 handler，不读取 stdin。
 
+## 命令行批准交互
+
+当前项目没有 UI，所有批准都在启动 loop 的同一个终端中完成。一次 Agent turn 如果产生
+多个需要批准的 shell 调用，CLI 按 interruption 顺序逐条处理，每条显示：
+
+```text
+Shell approval required
+cwd: .
+command: git push origin main
+Allow this call? [y/N]
+```
+
+展示字符串只用于人类阅读；实际执行仍使用原始 `executable` 与 `args[]`，不会把展示文本
+交给 shell。只有大小写不敏感的 `y` 或 `yes` 表示批准；空输入、`n`、`no`、其他输入
+或 EOF 都表示不批准。批准只覆盖当前 tool call，后续同规则调用仍需再次确认。
+
+交互提示写入 stderr，避免污染 CLI 最终写入 stdout 的 JSON 结果。如果 stdin 不是 TTY，
+CLI 不阻塞等待输入，而是用 `approval_required` 结构化错误拒绝并恢复 Agent；该错误设置
+`userActionRequired: true`，建议用户在交互式终端重跑。用户主动选择拒绝则使用
+`approval_rejected`，并设置 `userActionRequired: false`。
+
 ## 文件工具
 
 文件工具提供 `read` 与 `write` 两个 action：
@@ -208,6 +230,7 @@ approval-required 中相同或有歧义的规则，避免审批被宽泛 allow �
 `Runner.run()` 取得 interruption，调用 `state.approve()` 或 `state.reject()`，随后用
 同一 state 恢复 Runner。批准只对当前调用生效，不设置 `alwaysApprove`。拒绝时传给
 模型的是 `approval_rejected` 的 JSON error contract，而不是 SDK 默认文本。
+非交互终端无法收集决定时传给模型的是 `approval_required` contract。
 
 应用层约束保证直接工具输入不指定 workspace 外 cwd，也不调用未授权 executable。某个
 已授权程序自身若提供访问外部资源的功能，仍属于该程序的能力边界；首版不宣称提供
@@ -250,6 +273,8 @@ stage 失败流程停止运行，而不是伪造一个可重试的业务工具�
 - search 匹配、无匹配、无效正则、输出上限和相对路径；
 - shell allowlist、参数数组、相对 cwd、非零退出、timeout、缺失 executable 和输出上限；
 - shell 自动允许、请求批准、批准后恢复、拒绝后结构化返回，以及未匹配规则时拒绝；
+- CLI 仅接受 `y`/`yes`，默认拒绝，逐条处理多个 interruption，且不污染 stdout JSON；
+- 非 TTY 输入不阻塞，并向 Agent 返回 `approval_required`；
 - workspace 外调用不产生 approval request，且批准不能扩大 workspace 边界；
 - 每种工具失败都向 Agent 返回完整 error contract；
 - `tool_failed` trace 包含与返回值一致的 retry 依据；
