@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { createActorAgent } from "./agents/create-agent.js";
 import { createRunner } from "./agents/create-runner.js";
+import { disableSdkTracing } from "./agents/disable-sdk-tracing.js";
 import { loadLoopConfig } from "./config/load-config.js";
 import type { LoopState } from "./domain/loop-state.js";
 import { runLoop } from "./loop/loop-runner.js";
@@ -20,6 +21,10 @@ export async function runConfiguredLoop(
   task: string,
   configPath = resolve(process.cwd(), "config/loop.config.json"),
 ): Promise<LoopState> {
+  // Disable the SDK's process-wide exporter before constructing any Agent
+  // runtime. Local JSONL tracing below is a separate implementation.
+  disableSdkTracing();
+
   const loaded = await loadLoopConfig(configPath, process.env);
   const runner = createRunner(loaded.modelConfig, loaded.apiKey);
   const agent = createActorAgent(loaded.modelConfig);
