@@ -23,8 +23,8 @@ test("skeleton plan owns the three-iteration business stop condition", async () 
     objective: "Improve this answer",
   });
 
-  assert.match(plan.stopCondition.description, /three iterations/i);
-  assert.match(plan.nextAction, /iteration 1/i);
+  assert.match(plan.data.stopCondition.description, /three iterations/i);
+  assert.match(plan.data.nextAction, /iteration 1/i);
 });
 
 test("skeleton verification passes only on iteration three", async () => {
@@ -35,16 +35,16 @@ test("skeleton verification passes only on iteration three", async () => {
 
   const beforeBoundary = await runVerify({
     stepIndex: 2,
-    plan,
+    plan: plan.data,
     actionOutput: "Second result",
   });
   const atBoundary = await runVerify({
     stepIndex: 3,
-    plan,
+    plan: plan.data,
     actionOutput: "Third result",
   });
 
-  assert.equal(beforeBoundary.passed, false);
-  assert.equal(atBoundary.passed, true);
-  assert.match(atBoundary.evidence, /iteration 3/i);
+  assert.equal(beforeBoundary.data.passed, false);
+  assert.equal(atBoundary.data.passed, true);
+  assert.match(atBoundary.data.evidence, /iteration 3/i);
 });

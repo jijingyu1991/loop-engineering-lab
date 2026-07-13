@@ -5,16 +5,24 @@ import type {
   LoopStage,
   LoopStep,
   ObserveData,
+  OrientData,
   PlanData,
+  VerifyData,
 } from "../domain/loop-step.js";
 import { createPendingStage, type StageResult, type StepError } from "../domain/stage-result.js";
+import type {
+  StepDecision,
+  StepOutcome,
+  StepType,
+} from "../domain/step-decision.js";
 import type { StopDecision } from "../domain/stop-decision.js";
 import type { TraceWriter } from "../trace/jsonl-trace-writer.js";
+import { resolveNextStep } from "./resolve-next-step.js";
 import { runObserve } from "./stages/observe.js";
 import { runOrient } from "./stages/orient.js";
 import { runPlan } from "./stages/plan.js";
 import { runReflect } from "./stages/reflect.js";
-import { decideStop } from "./stages/stop.js";
+import { decideStop, type StopInput } from "./stages/stop.js";
 import { runVerify } from "./stages/verify.js";
 
 export interface ActExecutorInput {
@@ -23,7 +31,9 @@ export interface ActExecutorInput {
   maxTurns: number;
 }
 
-export type ActExecutor = (input: ActExecutorInput) => Promise<ActData>;
+export type ActExecutor = (
+  input: ActExecutorInput,
+) => Promise<StepOutcome<ActData>>;
 
 export interface RunLoopStepInput {
   task: string;
@@ -40,6 +50,10 @@ interface StageExecution<T> {
   ok: boolean;
   data: T | null;
   rawError?: unknown;
+}
+
+interface DecisionStageExecution<T> extends StageExecution<T> {
+  decision: StepDecision | null;
 }
 
 function sanitizeError(error: unknown): StepError {
@@ -99,6 +113,32 @@ async function executeStage<T>(input: {
   }
 }
 
+/**
+ * `StepDecision` 只控制本次运行时流转，不属于持久化的阶段业务数据。这个薄层
+ * 在复用统一生命周期逻辑的同时把 outcome 拆开：data 继续写入 LoopStep 与
+ * trace，decision 则只返回给协调器消费。
+ */
+async function executeDecisionStage<T>(input: {
+  stepIndex: number;
+  stageName: LoopStage;
+  stage: StageResult<T>;
+  traceWriter: TraceWriter;
+  now: () => string;
+  execute: () => Promise<StepOutcome<T>> | StepOutcome<T>;
+}): Promise<DecisionStageExecution<T>> {
+  let decision: StepDecision | null = null;
+  const execution = await executeStage({
+    ...input,
+    execute: async () => {
+      const outcome = await input.execute();
+      decision = outcome.decision;
+      return outcome.data;
+    },
+  });
+
+  return { ...execution, decision };
+}
+
 async function skipStage<T>(input: {
   stepIndex: number;
   stageName: LoopStage;
@@ -115,6 +155,18 @@ async function skipStage<T>(input: {
     stage: input.stageName,
     source: input.stage.source,
   });
+}
+
+async function skipPendingStage<T>(input: {
+  stepIndex: number;
+  stageName: LoopStage;
+  stage: StageResult<T>;
+  traceWriter: TraceWriter;
+  now: () => string;
+}): Promise<void> {
+  if (input.stage.status === "pending") {
+    await skipStage(input);
+  }
 }
 
 function createLoopStep(index: number, startedAt: string): LoopStep {
@@ -136,124 +188,210 @@ function createLoopStep(index: number, startedAt: string): LoopStep {
 /**
  * 只运行一个完整的 LoopStep。
  *
- * 本函数是协议协调器：它负责阶段顺序，但把各阶段的业务含义委托给小函数。
- * 状态变更被有意集中在这里，方便学习者在一个位置追踪所有生命周期转换。
+ * 本函数只负责消费阶段返回的 `StepDecision`，不再拥有阶段顺序。switch 的职责
+ * 是把阶段名称映射到具体实现并准备类型化输入；真正的下一阶段由执行结果决定。
  */
 export async function runLoopStep(
   input: RunLoopStepInput,
 ): Promise<{ step: LoopStep; decision: StopDecision }> {
   const now = input.now ?? (() => new Date().toISOString());
   const step = createLoopStep(input.stepIndex, now());
+  const visitedSteps = new Set<StepType>();
+  let currentStep: StepType = "observe";
+  let observation: ObserveData | null = null;
+  let orientation: OrientData | null = null;
+  let plan: PlanData | null = null;
+  let action: ActData | null = null;
+  let verification: VerifyData | null = null;
+  let failureReason: StopInput["failureReason"];
 
-  const observation = await executeStage({
+  while (currentStep !== "stop") {
+    visitedSteps.add(currentStep);
+    let execution: DecisionStageExecution<unknown> | null = null;
+
+    switch (currentStep) {
+      case "observe": {
+        const result = await executeDecisionStage({
+          stepIndex: step.index,
+          stageName: "observe",
+          stage: step.observe,
+          traceWriter: input.traceWriter,
+          now,
+          execute: () =>
+            runObserve({ task: input.task, previousStep: input.previousStep }),
+        });
+        observation = result.data;
+        execution = result;
+        break;
+      }
+      case "orient": {
+        const completedObservation = observation;
+        if (!completedObservation) {
+          throw new Error("orient requires a completed observe stage");
+        }
+        const result = await executeDecisionStage({
+          stepIndex: step.index,
+          stageName: "orient",
+          stage: step.orient,
+          traceWriter: input.traceWriter,
+          now,
+          execute: () => runOrient(completedObservation),
+        });
+        orientation = result.data;
+        execution = result;
+        break;
+      }
+      case "plan": {
+        const completedOrientation = orientation;
+        if (!completedOrientation) {
+          throw new Error("plan requires a completed orient stage");
+        }
+        const result = await executeDecisionStage({
+          stepIndex: step.index,
+          stageName: "plan",
+          stage: step.plan,
+          traceWriter: input.traceWriter,
+          now,
+          execute: () =>
+            runPlan({
+              stepIndex: step.index,
+              objective: completedOrientation.objective,
+            }),
+        });
+        plan = result.data;
+        execution = result;
+        break;
+      }
+      case "act": {
+        const completedObservation = observation;
+        const completedPlan = plan;
+        if (!completedObservation || !completedPlan) {
+          throw new Error("act requires completed observe and plan stages");
+        }
+        const result = await executeDecisionStage({
+          stepIndex: step.index,
+          stageName: "act",
+          stage: step.act,
+          traceWriter: input.traceWriter,
+          now,
+          execute: () =>
+            input.act({
+              observation: completedObservation,
+              plan: completedPlan,
+              maxTurns: input.maxTurns,
+            }),
+        });
+        action = result.data;
+        execution = result;
+        break;
+      }
+      case "verify": {
+        const completedPlan = plan;
+        const completedAction = action;
+        if (!completedPlan || !completedAction) {
+          throw new Error("verify requires completed plan and act stages");
+        }
+        const result = await executeDecisionStage({
+          stepIndex: step.index,
+          stageName: "verify",
+          stage: step.verify,
+          traceWriter: input.traceWriter,
+          now,
+          execute: () =>
+            runVerify({
+              stepIndex: step.index,
+              plan: completedPlan,
+              actionOutput: completedAction.output,
+            }),
+        });
+        verification = result.data;
+        execution = result;
+        break;
+      }
+      case "reflect": {
+        const completedAction = action;
+        const completedVerification = verification;
+        if (!completedAction || !completedVerification) {
+          throw new Error("reflect requires completed act and verify stages");
+        }
+        execution = await executeDecisionStage({
+          stepIndex: step.index,
+          stageName: "reflect",
+          stage: step.reflect,
+          traceWriter: input.traceWriter,
+          now,
+          execute: () =>
+            runReflect({
+              actionOutput: completedAction.output,
+              verification: completedVerification,
+            }),
+        });
+        break;
+      }
+    }
+
+    // switch 对当前 StepType 应当穷尽；该检查同时防御未来扩展 StepType 时忘记
+    // 注册执行器，使协议错误在本轮内立即显现。
+    if (!execution) {
+      throw new Error(`No executor registered for stage: ${currentStep}`);
+    }
+
+    if (!execution.ok || !execution.decision) {
+      failureReason =
+        execution.rawError instanceof MaxTurnsExceededError
+          ? "max_turns_exceeded"
+          : "step_error";
+      currentStep = "stop";
+      continue;
+    }
+
+    currentStep = resolveNextStep(execution.decision, visitedSteps);
+  }
+
+  // 条件跳转或失败都可能留下未执行槽位。按协议展示顺序依次标记 skipped，
+  // 保证 trace 阅读者仍能区分“未选择执行”和“执行失败”。
+  await skipPendingStage({
     stepIndex: step.index,
     stageName: "observe",
     stage: step.observe,
     traceWriter: input.traceWriter,
     now,
-    execute: () =>
-      runObserve({ task: input.task, previousStep: input.previousStep }),
   });
-
-  const orientation = observation.data
-    ? await executeStage({
-        stepIndex: step.index,
-        stageName: "orient",
-        stage: step.orient,
-        traceWriter: input.traceWriter,
-        now,
-        execute: () => runOrient(observation.data!),
-      })
-    : { ok: false, data: null };
-
-  if (!observation.ok) {
-    await skipStage({ stepIndex: step.index, stageName: "orient", stage: step.orient, traceWriter: input.traceWriter, now });
-  }
-
-  const plan = orientation.data
-    ? await executeStage({
-        stepIndex: step.index,
-        stageName: "plan",
-        stage: step.plan,
-        traceWriter: input.traceWriter,
-        now,
-        execute: () =>
-          runPlan({ stepIndex: step.index, objective: orientation.data!.objective }),
-      })
-    : { ok: false, data: null };
-
-  if (!orientation.ok) {
-    await skipStage({ stepIndex: step.index, stageName: "plan", stage: step.plan, traceWriter: input.traceWriter, now });
-  }
-
-  const action = observation.data && plan.data
-    ? await executeStage({
-        stepIndex: step.index,
-        stageName: "act",
-        stage: step.act,
-        traceWriter: input.traceWriter,
-        now,
-        execute: () =>
-          input.act({
-            observation: observation.data!,
-            plan: plan.data!,
-            maxTurns: input.maxTurns,
-          }),
-      })
-    : { ok: false, data: null };
-
-  if (!plan.ok) {
-    await skipStage({ stepIndex: step.index, stageName: "act", stage: step.act, traceWriter: input.traceWriter, now });
-  }
-
-  const verification = plan.data && action.data
-    ? await executeStage({
-        stepIndex: step.index,
-        stageName: "verify",
-        stage: step.verify,
-        traceWriter: input.traceWriter,
-        now,
-        execute: () =>
-          runVerify({
-            stepIndex: step.index,
-            plan: plan.data!,
-            actionOutput: action.data!.output,
-          }),
-      })
-    : { ok: false, data: null };
-
-  if (!action.ok) {
-    await skipStage({ stepIndex: step.index, stageName: "verify", stage: step.verify, traceWriter: input.traceWriter, now });
-  }
-
-  const reflection = action.data && verification.data
-    ? await executeStage({
-        stepIndex: step.index,
-        stageName: "reflect",
-        stage: step.reflect,
-        traceWriter: input.traceWriter,
-        now,
-        execute: () =>
-          runReflect({
-            actionOutput: action.data!.output,
-            verification: verification.data!,
-          }),
-      })
-    : { ok: false, data: null };
-
-  if (!verification.ok) {
-    await skipStage({ stepIndex: step.index, stageName: "reflect", stage: step.reflect, traceWriter: input.traceWriter, now });
-  }
-
-  const failedExecution = [observation, orientation, plan, action, verification, reflection].find(
-    (execution) => !execution.ok && execution.rawError !== undefined,
-  );
-  const failureReason =
-    failedExecution?.rawError instanceof MaxTurnsExceededError
-      ? "max_turns_exceeded"
-      : failedExecution
-        ? "step_error"
-        : undefined;
+  await skipPendingStage({
+    stepIndex: step.index,
+    stageName: "orient",
+    stage: step.orient,
+    traceWriter: input.traceWriter,
+    now,
+  });
+  await skipPendingStage({
+    stepIndex: step.index,
+    stageName: "plan",
+    stage: step.plan,
+    traceWriter: input.traceWriter,
+    now,
+  });
+  await skipPendingStage({
+    stepIndex: step.index,
+    stageName: "act",
+    stage: step.act,
+    traceWriter: input.traceWriter,
+    now,
+  });
+  await skipPendingStage({
+    stepIndex: step.index,
+    stageName: "verify",
+    stage: step.verify,
+    traceWriter: input.traceWriter,
+    now,
+  });
+  await skipPendingStage({
+    stepIndex: step.index,
+    stageName: "reflect",
+    stage: step.reflect,
+    traceWriter: input.traceWriter,
+    now,
+  });
 
   const stopExecution = await executeStage({
     stepIndex: step.index,
@@ -265,7 +403,7 @@ export async function runLoopStep(
       decideStop({
         stepIndex: step.index,
         maxSteps: input.maxSteps,
-        verificationPassed: verification.data?.passed ?? false,
+        verificationPassed: verification?.passed ?? false,
         failureReason,
       }),
   });

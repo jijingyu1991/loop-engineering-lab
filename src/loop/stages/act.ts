@@ -5,6 +5,7 @@ import type {
   ObserveData,
   PlanData,
 } from "../../domain/loop-step.js";
+import type { StepOutcome } from "../../domain/step-decision.js";
 
 export interface ActInput {
   runner: Runner;
@@ -21,7 +22,7 @@ export interface ActInput {
  * `maxSteps` 则限制外层 loop 最多执行多少次完整的 observe→stop 迭代。两者
  * 有意保持独立，分别约束单次 Agent 调用和整个工程循环。
  */
-export async function runAct(input: ActInput): Promise<ActData> {
+export async function runAct(input: ActInput): Promise<StepOutcome<ActData>> {
   const prompt = [
     `Task: ${input.observation.task}`,
     `Previous action: ${input.observation.previousAction ?? "none"}`,
@@ -37,5 +38,11 @@ export async function runAct(input: ActInput): Promise<ActData> {
     throw new Error("Agent returned an empty text output");
   }
 
-  return { output: result.finalOutput.trim() };
+  return {
+    data: { output: result.finalOutput.trim() },
+    decision: {
+      nextStep: "verify",
+      reason: "action_completed",
+    },
+  };
 }

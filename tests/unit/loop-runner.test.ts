@@ -30,7 +30,13 @@ test("runs seven stages in order for three iterations", async () => {
     traceWriter,
     act: async ({ observation }) => {
       actionCalls += 1;
-      return { output: `${observation.task} result ${actionCalls}` };
+      return {
+        data: { output: `${observation.task} result ${actionCalls}` },
+        decision: {
+          nextStep: "verify",
+          reason: "action_completed",
+        },
+      };
     },
   });
 
