@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
 import { resolveWorkspacePath } from "./resolve-workspace-path.js";
+import { sanitizeToolText } from "./sanitize-tool-text.js";
 import { traceToolExecution } from "./trace-tool-execution.js";
 import { resolveShellPermission } from "./tool-permission.js";
 import {
@@ -48,6 +49,8 @@ function runBoundedProcess(input: {
     let stderr = "";
     let forcedReason: ProcessOutcome["reason"] | null = null;
     let settled = false;
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
 
     const child = spawn(input.executable, input.args, {
       cwd: input.cwd,
@@ -59,32 +62,46 @@ function runBoundedProcess(input: {
     const finish = (outcome: Omit<ProcessOutcome, "durationMs">) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       resolve({
         ...outcome,
         durationMs: Math.max(0, performance.now() - startedAt),
       });
     };
 
-    const enforceOutputLimit = () => {
-      if (
-        !forcedReason &&
-        stdout.length + stderr.length > input.maxOutputChars
-      ) {
-        forcedReason = "output_limit";
-        child.kill();
-      }
+    const requestTermination = (
+      reason: Extract<ProcessOutcome["reason"], "timeout" | "output_limit">,
+    ) => {
+      if (settled || forcedReason) return;
+      forcedReason = reason;
+      child.kill("SIGTERM");
+      // 子进程可以捕获并忽略 SIGTERM。短暂宽限后使用 SIGKILL，保证 timeout 与
+      // output limit 真正构成宿主级资源上限，而不是仅向子进程发出建议。
+      killTimer = setTimeout(() => {
+        if (!settled) child.kill("SIGKILL");
+      }, 50);
     };
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-      enforceOutputLimit();
+      if (forcedReason) return;
+      const remaining = Math.max(
+        0,
+        input.maxOutputChars - stdout.length - stderr.length,
+      );
+      stdout += chunk.slice(0, remaining);
+      if (chunk.length > remaining) requestTermination("output_limit");
     });
     child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
-      enforceOutputLimit();
+      if (forcedReason) return;
+      const remaining = Math.max(
+        0,
+        input.maxOutputChars - stdout.length - stderr.length,
+      );
+      stderr += chunk.slice(0, remaining);
+      if (chunk.length > remaining) requestTermination("output_limit");
     });
 
     child.once("error", (error: NodeJS.ErrnoException) => {
@@ -107,12 +124,10 @@ function runBoundedProcess(input: {
       });
     });
 
-    const timer = setTimeout(() => {
-      if (!settled && !forcedReason) {
-        forcedReason = "timeout";
-        child.kill();
-      }
-    }, input.timeoutMs);
+    timeoutTimer = setTimeout(
+      () => requestTermination("timeout"),
+      input.timeoutMs,
+    );
   });
 }
 
@@ -152,14 +167,16 @@ function processResult(
 ): ToolResult<ShellToolData> {
   const boundedStdout = outcome.stdout.slice(0, maxOutputChars);
   const boundedStderr = outcome.stderr.slice(0, maxOutputChars);
+  const safeStdout = sanitizeToolText(boundedStdout);
+  const safeStderr = sanitizeToolText(boundedStderr);
   const commonEvidence = {
     tool: "shell",
     operation: "execute",
     executable: input.executable,
     cwd,
     durationMs: outcome.durationMs,
-    stdout: boundedStdout,
-    stderr: boundedStderr,
+    stdout: safeStdout,
+    stderr: safeStderr,
   };
 
   if (outcome.reason === "timeout") {
@@ -293,11 +310,11 @@ function adapterFailure(): ToolResult<never> {
   return {
     ok: false,
     error: createToolError({
-      type: "internal_error",
-      message: "The shell tool adapter failed unexpectedly.",
+      type: "invalid_input",
+      message: "The shell tool arguments failed schema validation.",
       retryable: false,
       userActionRequired: false,
-      suggestedNextStep: "Check the tool arguments and trace before retrying.",
+      suggestedNextStep: "Correct the shell tool arguments to match its schema.",
       evidence: { tool: "shell", operation: "adapter" },
     }),
   };

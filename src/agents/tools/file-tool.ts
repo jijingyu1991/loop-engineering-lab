@@ -266,11 +266,11 @@ function adapterFailure(): ToolResult<never> {
   return {
     ok: false,
     error: createToolError({
-      type: "internal_error",
-      message: "The file tool adapter failed unexpectedly.",
+      type: "invalid_input",
+      message: "The file tool arguments failed schema validation.",
       retryable: false,
       userActionRequired: false,
-      suggestedNextStep: "Check the tool arguments and trace before retrying.",
+      suggestedNextStep: "Correct the file tool arguments to match its schema.",
       evidence: { tool: "file", operation: "adapter" },
     }),
   };

@@ -68,7 +68,7 @@ test("keeps adapter validation failures structured and traceable", async () => {
     : output as { ok: boolean; error: { type: string } };
 
   assert.equal(result.ok, false);
-  assert.equal(result.error.type, "internal_error");
+  assert.equal(result.error.type, "invalid_input");
   assert.ok(
     traceWriter.events.some(
       (event) =>
@@ -104,4 +104,26 @@ test("traces semantic file input failures before returning them to the Agent", a
         event.event === "tool_failed" && event.operation === "write",
     ),
   );
+});
+
+test("traces only a search pattern summary, not the raw pattern", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const tools = createAgentTools(runtime, traceWriter);
+  const searchTool = tools.find((item) => item.name === "workspace_search");
+  assert.ok(searchTool && searchTool.type === "function");
+  const pattern = "sensitive-search-token";
+
+  await searchTool.invoke(
+    new RunContext(),
+    JSON.stringify({ pattern, path: ".", regex: false, glob: null }),
+  );
+
+  const started = traceWriter.events.find(
+    (event) => event.event === "tool_started" && event.tool === "search",
+  );
+  assert.equal(started?.event, "tool_started");
+  if (started?.event === "tool_started") {
+    assert.equal("pattern" in started.input, false);
+    assert.equal(started.input.patternChars, pattern.length);
+  }
 });

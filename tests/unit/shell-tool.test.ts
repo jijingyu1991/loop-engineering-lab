@@ -167,6 +167,30 @@ test("classifies a timeout as retryable", async () => {
   });
 });
 
+test("escalates timeout termination when a child ignores SIGTERM", async () => {
+  await withWorkspace(async (root) => {
+    const startedAt = performance.now();
+    const result = await executeShellTool(
+      {
+        executable: process.execPath,
+        args: [
+          "-e",
+          [
+            'process.on("SIGTERM", () => undefined);',
+            "setTimeout(() => process.exit(0), 800);",
+          ].join(" "),
+        ],
+        cwd: ".",
+      },
+      runtime(root, { timeoutMs: 100 }),
+    );
+
+    assert.equal(result.ok, false);
+    assert.ok(performance.now() - startedAt < 400);
+    if (!result.ok) assert.equal(result.error.type, "timeout");
+  });
+});
+
 test("stops output that exceeds the configured cap", async () => {
   await withWorkspace(async (root) => {
     const result = await executeShellTool(
@@ -198,5 +222,33 @@ test("returns dependency_missing when an allowed executable is absent", async ()
 
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.type, "dependency_missing");
+  });
+});
+
+test("redacts configured secret values from process failure evidence", async () => {
+  await withWorkspace(async (root) => {
+    const previous = process.env.LOOP_LAB_SECRET;
+    process.env.LOOP_LAB_SECRET = "super-secret-value";
+    try {
+      const result = await executeShellTool(
+        {
+          executable: process.execPath,
+          args: [
+            "-e",
+            'process.stderr.write("super-secret-value"); process.exit(1);',
+          ],
+          cwd: ".",
+        },
+        runtime(root),
+      );
+
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        assert.equal(result.error.evidence.stderr, "[REDACTED]");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.LOOP_LAB_SECRET;
+      else process.env.LOOP_LAB_SECRET = previous;
+    }
   });
 });

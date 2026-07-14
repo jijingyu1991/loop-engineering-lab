@@ -44,6 +44,7 @@ async function withWorkspace(
       "utf8",
     );
     await writeFile(join(root, "notes.md"), "a+b documentation\n", "utf8");
+    await writeFile(join(root, "options.txt"), "--files is literal text\n", "utf8");
     await run(root);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -81,6 +82,21 @@ test("supports regex and glob filtering only when requested", async () => {
   });
 });
 
+test("treats an option-looking pattern as positional text", async () => {
+  await withWorkspace(async (root) => {
+    const result = await executeSearchTool(
+      { pattern: "--files", path: ".", regex: false, glob: null },
+      runtime(root),
+    );
+
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.data.matches.length, 1);
+      assert.equal(result.data.matches[0]?.path, "options.txt");
+    }
+  });
+});
+
 test("treats no matches as a successful empty result", async () => {
   await withWorkspace(async (root) => {
     const result = await executeSearchTool(
@@ -95,8 +111,9 @@ test("treats no matches as a successful empty result", async () => {
 
 test("returns invalid_input for an invalid regular expression", async () => {
   await withWorkspace(async (root) => {
+    const pattern = "private-search-[";
     const result = await executeSearchTool(
-      { pattern: "[", path: ".", regex: true, glob: null },
+      { pattern, path: ".", regex: true, glob: null },
       runtime(root),
     );
 
@@ -104,6 +121,7 @@ test("returns invalid_input for an invalid regular expression", async () => {
     if (!result.ok) {
       assert.equal(result.error.type, "invalid_input");
       assert.match(String(result.error.evidence.stderr), /regex|unclosed|class/i);
+      assert.equal(String(result.error.evidence.stderr).includes(pattern), false);
     }
   });
 });

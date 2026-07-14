@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
 import { resolveWorkspacePath } from "./resolve-workspace-path.js";
+import { sanitizeToolText } from "./sanitize-tool-text.js";
 import { traceToolExecution } from "./trace-tool-execution.js";
 import {
   createToolError,
@@ -35,7 +36,8 @@ interface RipgrepOutcome {
   stdout: string;
   stderr: string;
   exitCode: number | null;
-  reason: "closed" | "output_limit" | "spawn_error";
+  reason: "closed" | "output_limit" | "match_limit" | "spawn_error";
+  observedMatches: number;
   errorCode?: string;
 }
 
@@ -44,12 +46,16 @@ function runRipgrep(input: {
   args: string[];
   cwd: string;
   maxOutputChars: number;
+  maxMatches: number;
 }): Promise<RipgrepOutcome> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
-    let outputLimited = false;
+    let forcedReason: "output_limit" | "match_limit" | null = null;
+    let observedMatches = 0;
+    let pendingLine = "";
     let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
     const child = spawn(input.executable, input.args, {
       cwd: input.cwd,
       shell: false,
@@ -60,24 +66,58 @@ function runRipgrep(input: {
     const finish = (outcome: RipgrepOutcome) => {
       if (settled) return;
       settled = true;
+      if (killTimer !== undefined) clearTimeout(killTimer);
       resolve(outcome);
     };
-    const enforceLimit = () => {
-      if (!outputLimited && stdout.length + stderr.length > input.maxOutputChars) {
-        outputLimited = true;
-        child.kill();
+    const requestTermination = (reason: "output_limit" | "match_limit") => {
+      if (settled || forcedReason) return;
+      forcedReason = reason;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (!settled) child.kill("SIGKILL");
+      }, 50);
+    };
+    const countCompleteMatchLines = (chunk: string) => {
+      pendingLine += chunk;
+      let newlineIndex = pendingLine.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const line = pendingLine.slice(0, newlineIndex);
+        pendingLine = pendingLine.slice(newlineIndex + 1);
+        try {
+          if ((JSON.parse(line) as { type?: string }).type === "match") {
+            observedMatches += 1;
+            if (observedMatches > input.maxMatches) {
+              requestTermination("match_limit");
+              return;
+            }
+          }
+        } catch {
+          // 完整响应仍由 parseMatches 负责校验；流式计数只用于尽早执行资源上限。
+        }
+        newlineIndex = pendingLine.indexOf("\n");
       }
     };
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-      enforceLimit();
+      if (forcedReason) return;
+      const remaining = Math.max(
+        0,
+        input.maxOutputChars - stdout.length - stderr.length,
+      );
+      stdout += chunk.slice(0, remaining);
+      countCompleteMatchLines(chunk.slice(0, remaining));
+      if (chunk.length > remaining) requestTermination("output_limit");
     });
     child.stderr?.on("data", (chunk: string) => {
-      stderr += chunk;
-      enforceLimit();
+      if (forcedReason) return;
+      const remaining = Math.max(
+        0,
+        input.maxOutputChars - stdout.length - stderr.length,
+      );
+      stderr += chunk.slice(0, remaining);
+      if (chunk.length > remaining) requestTermination("output_limit");
     });
     child.once("error", (error: NodeJS.ErrnoException) => {
       finish({
@@ -85,6 +125,7 @@ function runRipgrep(input: {
         stderr,
         exitCode: null,
         reason: "spawn_error",
+        observedMatches,
         errorCode: error.code,
       });
     });
@@ -93,7 +134,8 @@ function runRipgrep(input: {
         stdout,
         stderr,
         exitCode,
-        reason: outputLimited ? "output_limit" : "closed",
+        reason: forcedReason ?? "closed",
+        observedMatches,
       });
     });
   });
@@ -174,16 +216,23 @@ export async function executeSearchTool(
   const args = ["--json", "--sort", "path", "--color", "never"];
   if (!input.regex) args.push("--fixed-strings");
   if (input.glob !== null) args.push("--glob", input.glob);
-  args.push(input.pattern, searchRoot.data.relativePath);
+  // `--` 明确结束 rg 选项解析，避免以 `--pre=...` 等开头的搜索文本变成参数。
+  args.push("--", input.pattern, searchRoot.data.relativePath);
 
   const outcome = await runRipgrep({
     executable: dependencies.executable ?? "rg",
     args,
     cwd: workspace.data.absolutePath,
     maxOutputChars: runtime.search.maxOutputChars,
+    maxMatches: runtime.search.maxMatches,
   });
   const boundedStdout = outcome.stdout.slice(0, runtime.search.maxOutputChars);
   const boundedStderr = outcome.stderr.slice(0, runtime.search.maxOutputChars);
+  // rg 的语法错误可能在 stderr 中复述搜索词。失败证据会写入 trace，因此既要
+  // 清除本次原始 pattern，也要清除环境中已配置的凭据。
+  const safeStderr = sanitizeToolText(
+    boundedStderr.replaceAll(input.pattern, "[REDACTED]"),
+  );
 
   if (outcome.reason === "spawn_error") {
     const dependencyMissing = outcome.errorCode === "ENOENT";
@@ -212,6 +261,19 @@ export async function executeSearchTool(
         path: searchRoot.data.relativePath,
         maxOutputChars: runtime.search.maxOutputChars,
         observedChars: outcome.stdout.length + outcome.stderr.length,
+      },
+    });
+  }
+
+  if (outcome.reason === "match_limit") {
+    return searchFailure({
+      type: "output_limit_exceeded",
+      message: "Search returned more matches than the configured limit.",
+      suggestedNextStep: "Narrow the path, pattern, or glob before retrying.",
+      evidence: {
+        path: searchRoot.data.relativePath,
+        observedMatches: outcome.observedMatches,
+        maxMatches: runtime.search.maxMatches,
       },
     });
   }
@@ -247,7 +309,7 @@ export async function executeSearchTool(
       evidence: {
         path: searchRoot.data.relativePath,
         exitCode: outcome.exitCode,
-        stderr: boundedStderr,
+        stderr: safeStderr,
       },
     });
   }
@@ -296,9 +358,9 @@ const searchToolParameters = z.object({
 
 function adapterFailure(): ToolResult<never> {
   return searchFailure({
-    type: "internal_error",
-    message: "The search tool adapter failed unexpectedly.",
-    suggestedNextStep: "Check the tool arguments and trace before retrying.",
+    type: "invalid_input",
+    message: "The search tool arguments failed schema validation.",
+    suggestedNextStep: "Correct the search tool arguments to match its schema.",
     evidence: {},
   });
 }
@@ -316,7 +378,7 @@ export function createSearchTool(
         tool: "search",
         operation: "search",
         inputSummary: {
-          pattern: input.pattern,
+          patternChars: input.pattern.length,
           path: input.path,
           regex: input.regex,
           glob: input.glob,
