@@ -13,6 +13,23 @@ export const LOOP_STAGE_ORDER = [
 
 export type LoopStage = (typeof LOOP_STAGE_ORDER)[number];
 
+export const ACT_OUTCOMES = [
+  "succeeded",
+  "continue",
+  "failed",
+  "blocked",
+  "cancelled",
+] as const;
+
+export type ActOutcome = (typeof ACT_OUTCOMES)[number];
+
+export type LoopStepStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled";
+
 export interface ObserveData {
   task: string;
   previousAction: string | null;
@@ -52,7 +69,7 @@ export interface ReflectData {
  */
 export interface LoopStep {
   index: number;
-  status: "running" | "completed" | "failed";
+  status: LoopStepStatus;
   observe: StageResult<ObserveData>;
   orient: StageResult<OrientData>;
   plan: StageResult<PlanData>;

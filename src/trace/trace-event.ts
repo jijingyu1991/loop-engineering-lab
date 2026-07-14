@@ -1,4 +1,5 @@
 import type { LoopStage } from "../domain/loop-step.js";
+import type { LoopStatus } from "../domain/loop-state.js";
 import type { StepError } from "../domain/stage-result.js";
 import type {
   ToolError,
@@ -32,7 +33,7 @@ export interface StageTraceEvent {
 export interface LoopStoppedEvent {
   event: "loop_stopped";
   timestamp: string;
-  status: "completed" | "failed";
+  status: Exclude<LoopStatus, "running">;
   stopReason: StopReason;
   completedSteps: number;
 }
