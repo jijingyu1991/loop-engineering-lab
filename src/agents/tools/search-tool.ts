@@ -13,6 +13,7 @@ import {
   type ToolResult,
 } from "./tool-result.js";
 import type { ToolRuntimeConfig } from "./tool-runtime-config.js";
+import type { ToolOutcomeRecorder } from "./tool-outcome-recorder.js";
 
 export interface SearchToolInput {
   pattern: string;
@@ -368,6 +369,7 @@ function adapterFailure(): ToolResult<never> {
 export function createSearchTool(
   runtime: ToolRuntimeConfig,
   traceWriter: TraceWriter,
+  outcomeRecorder: ToolOutcomeRecorder,
 ) {
   return tool({
     name: "workspace_search",
@@ -384,6 +386,7 @@ export function createSearchTool(
           glob: input.glob,
         },
         traceWriter,
+        outcomeRecorder,
         execute: () => executeSearchTool(input, runtime),
       }),
     errorFunction: async () =>
@@ -393,6 +396,7 @@ export function createSearchTool(
           operation: "adapter",
           inputSummary: { validation: "failed" },
           traceWriter,
+          outcomeRecorder,
           execute: async () => adapterFailure(),
         }),
       ),

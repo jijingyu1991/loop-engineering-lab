@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { createToolOutcomeRecorder } from "../../src/agents/tools/tool-outcome-recorder.js";
 import { traceToolExecution } from "../../src/agents/tools/trace-tool-execution.js";
 import { createToolError } from "../../src/agents/tools/tool-result.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
@@ -65,6 +66,8 @@ test("writes started and completed events around a successful tool result", asyn
 
 test("writes the same structured retry basis returned to the Agent", async () => {
   const traceWriter = new MemoryTraceWriter();
+  const outcomeRecorder = createToolOutcomeRecorder();
+  const checkpoint = outcomeRecorder.checkpoint();
   const error = createToolError({
     type: "timeout",
     message: "Command timed out.",
@@ -79,6 +82,7 @@ test("writes the same structured retry basis returned to the Agent", async () =>
     operation: "execute",
     inputSummary: { executable: "node", cwd: "." },
     traceWriter,
+    outcomeRecorder,
     now: sequence([
       "2026-07-13T10:00:00.000Z",
       "2026-07-13T10:00:01.000Z",
@@ -88,6 +92,8 @@ test("writes the same structured retry basis returned to the Agent", async () =>
   });
 
   assert.deepEqual(result, { ok: false, error });
+  assert.deepEqual(outcomeRecorder.failuresSince(checkpoint), [error]);
+  assert.equal(outcomeRecorder.failuresSince(checkpoint)[0], error);
   const failed = traceWriter.events.at(-1);
   assert.equal(failed?.event, "tool_failed");
   if (failed?.event === "tool_failed") {

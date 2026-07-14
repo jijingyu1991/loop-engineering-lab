@@ -5,6 +5,7 @@ import { RunContext } from "@openai/agents";
 
 import { createActorAgent } from "../../src/agents/create-agent.js";
 import { createAgentTools } from "../../src/agents/tools/create-agent-tools.js";
+import { createToolOutcomeRecorder } from "../../src/agents/tools/tool-outcome-recorder.js";
 import type { ToolRuntimeConfig } from "../../src/agents/tools/tool-runtime-config.js";
 import type { ModelConfig } from "../../src/config/config-schema.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
@@ -39,7 +40,11 @@ class MemoryTraceWriter implements TraceWriter {
 }
 
 test("registers file, search, and shell tools on the actor", () => {
-  const tools = createAgentTools(runtime, new MemoryTraceWriter());
+  const tools = createAgentTools(
+    runtime,
+    new MemoryTraceWriter(),
+    createToolOutcomeRecorder(),
+  );
   const agent = createActorAgent(modelConfig, tools);
 
   assert.deepEqual(
@@ -50,7 +55,7 @@ test("registers file, search, and shell tools on the actor", () => {
 
 test("keeps adapter validation failures structured and traceable", async () => {
   const traceWriter = new MemoryTraceWriter();
-  const tools = createAgentTools(runtime, traceWriter);
+  const tools = createAgentTools(runtime, traceWriter, createToolOutcomeRecorder());
   const fileTool = tools.find((item) => item.name === "workspace_file");
   assert.ok(fileTool && fileTool.type === "function");
 
@@ -79,7 +84,7 @@ test("keeps adapter validation failures structured and traceable", async () => {
 
 test("traces semantic file input failures before returning them to the Agent", async () => {
   const traceWriter = new MemoryTraceWriter();
-  const tools = createAgentTools(runtime, traceWriter);
+  const tools = createAgentTools(runtime, traceWriter, createToolOutcomeRecorder());
   const fileTool = tools.find((item) => item.name === "workspace_file");
   assert.ok(fileTool && fileTool.type === "function");
 
@@ -108,7 +113,7 @@ test("traces semantic file input failures before returning them to the Agent", a
 
 test("traces only a search pattern summary, not the raw pattern", async () => {
   const traceWriter = new MemoryTraceWriter();
-  const tools = createAgentTools(runtime, traceWriter);
+  const tools = createAgentTools(runtime, traceWriter, createToolOutcomeRecorder());
   const searchTool = tools.find((item) => item.name === "workspace_search");
   assert.ok(searchTool && searchTool.type === "function");
   const pattern = "sensitive-search-token";

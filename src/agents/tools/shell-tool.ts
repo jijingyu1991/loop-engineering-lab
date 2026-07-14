@@ -13,6 +13,7 @@ import {
   type ToolResult,
 } from "./tool-result.js";
 import type { ToolRuntimeConfig } from "./tool-runtime-config.js";
+import type { ToolOutcomeRecorder } from "./tool-outcome-recorder.js";
 
 export interface ShellToolInput {
   executable: string;
@@ -323,6 +324,7 @@ function adapterFailure(): ToolResult<never> {
 export function createShellTool(
   runtime: ToolRuntimeConfig,
   traceWriter: TraceWriter,
+  outcomeRecorder: ToolOutcomeRecorder,
 ) {
   return tool({
     name: "workspace_shell",
@@ -348,6 +350,7 @@ export function createShellTool(
           cwd: input.cwd,
         },
         traceWriter,
+        outcomeRecorder,
         // SDK 只会在 needsApproval 已获批准后调用 execute；allowed 命令也安全地
         // 通过同一执行路径。denied 与 workspace 越界仍由执行器再次防御。
         execute: () => executeShellTool(input, runtime, { approvalGranted: true }),
@@ -359,6 +362,7 @@ export function createShellTool(
           operation: "adapter",
           inputSummary: { validation: "failed" },
           traceWriter,
+          outcomeRecorder,
           execute: async () => adapterFailure(),
         }),
       ),

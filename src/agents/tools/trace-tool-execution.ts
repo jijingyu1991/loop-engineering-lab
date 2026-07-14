@@ -6,12 +6,14 @@ import type {
   ToolEvidence,
   ToolResult,
 } from "./tool-result.js";
+import type { ToolOutcomeRecorder } from "./tool-outcome-recorder.js";
 
 export interface TraceToolExecutionInput<T> {
   tool: LocalToolName;
   operation: string;
   inputSummary: ToolEvidence;
   traceWriter: TraceWriter;
+  outcomeRecorder?: ToolOutcomeRecorder;
   execute: () => Promise<ToolResult<T>>;
   now?: () => string;
   clock?: () => number;
@@ -51,6 +53,9 @@ export async function traceToolExecution<T>(
       evidence: result.evidence,
     });
   } else {
+    // recorder 与 trace 使用同一个 ToolError 对象。前者服务本轮状态决策，后者服务
+    // 持久审计，避免两条路径分别重新分类错误后产生语义漂移。
+    input.outcomeRecorder?.recordFailure(result.error);
     await input.traceWriter.write({
       event: "tool_failed",
       timestamp,

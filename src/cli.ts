@@ -8,6 +8,7 @@ import { createRunner } from "./agents/create-runner.js";
 import { disableSdkTracing } from "./agents/disable-sdk-tracing.js";
 import { createTerminalApprovalHandler } from "./agents/terminal-approval-handler.js";
 import { createAgentTools } from "./agents/tools/create-agent-tools.js";
+import { createToolOutcomeRecorder } from "./agents/tools/tool-outcome-recorder.js";
 import { createToolRuntimeConfig } from "./agents/tools/tool-runtime-config.js";
 import { loadLoopConfig } from "./config/load-config.js";
 import type { LoopState } from "./domain/loop-state.js";
@@ -34,7 +35,8 @@ export async function runConfiguredLoop(
     maxFiles: 20,
   });
   const toolRuntime = createToolRuntimeConfig(loaded.config, process.cwd());
-  const tools = createAgentTools(toolRuntime, traceWriter);
+  const outcomeRecorder = createToolOutcomeRecorder();
+  const tools = createAgentTools(toolRuntime, traceWriter, outcomeRecorder);
   const agent = createActorAgent(loaded.modelConfig, tools);
   const approvalHandler = createTerminalApprovalHandler({
     input: process.stdin,

@@ -20,6 +20,7 @@ import {
   type ToolResult,
 } from "./tool-result.js";
 import type { ToolRuntimeConfig } from "./tool-runtime-config.js";
+import type { ToolOutcomeRecorder } from "./tool-outcome-recorder.js";
 
 export type FileToolInput =
   | { action: "read"; path: string }
@@ -279,6 +280,7 @@ function adapterFailure(): ToolResult<never> {
 export function createFileTool(
   runtime: ToolRuntimeConfig,
   traceWriter: TraceWriter,
+  outcomeRecorder: ToolOutcomeRecorder,
 ) {
   return tool({
     name: "workspace_file",
@@ -290,6 +292,7 @@ export function createFileTool(
         operation: input.action,
         inputSummary: { path: input.path, overwrite: input.overwrite },
         traceWriter,
+        outcomeRecorder,
         execute: () => {
           if (input.action === "write" && input.content === null) {
             return Promise.resolve({
@@ -327,6 +330,7 @@ export function createFileTool(
           operation: "adapter",
           inputSummary: { validation: "failed" },
           traceWriter,
+          outcomeRecorder,
           execute: async () => adapterFailure(),
         }),
       ),

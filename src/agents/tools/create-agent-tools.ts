@@ -2,6 +2,7 @@ import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
 import { createFileTool } from "./file-tool.js";
 import { createSearchTool } from "./search-tool.js";
 import { createShellTool } from "./shell-tool.js";
+import type { ToolOutcomeRecorder } from "./tool-outcome-recorder.js";
 import type { ToolRuntimeConfig } from "./tool-runtime-config.js";
 
 /**
@@ -11,10 +12,11 @@ import type { ToolRuntimeConfig } from "./tool-runtime-config.js";
 export function createAgentTools(
   runtime: ToolRuntimeConfig,
   traceWriter: TraceWriter,
+  outcomeRecorder: ToolOutcomeRecorder,
 ) {
   return [
-    createFileTool(runtime, traceWriter),
-    createSearchTool(runtime, traceWriter),
-    createShellTool(runtime, traceWriter),
+    createFileTool(runtime, traceWriter, outcomeRecorder),
+    createSearchTool(runtime, traceWriter, outcomeRecorder),
+    createShellTool(runtime, traceWriter, outcomeRecorder),
   ];
 }
