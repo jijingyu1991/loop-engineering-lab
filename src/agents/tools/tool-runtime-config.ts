@@ -5,6 +5,9 @@ import type { LoopConfig } from "../../config/config-schema.js";
 export interface ExecutableRule {
   executable: string;
   argsPrefix: string[];
+  // 配置文件规则省略该字段时保持既有 prefix 语义；coding composition 可以在
+  // 内部选择 exact，避免把执行策略细节扩散到用户配置合同。
+  argsMatch?: "prefix" | "exact";
 }
 
 export interface ToolRuntimeConfig {
@@ -48,9 +51,13 @@ export function createToolRuntimeConfig(
 }
 
 const CODING_ALLOWED_EXECUTABLES: ExecutableRule[] = [
-  { executable: "npm", argsPrefix: ["test"] },
-  { executable: "npm", argsPrefix: ["run", "build"] },
-  { executable: "git", argsPrefix: ["status"] },
+  { executable: "npm", argsPrefix: ["test"], argsMatch: "exact" },
+  {
+    executable: "npm",
+    argsPrefix: ["run", "build"],
+    argsMatch: "exact",
+  },
+  { executable: "git", argsPrefix: ["status"], argsMatch: "exact" },
 ];
 
 /**
@@ -70,6 +77,7 @@ export function createCodingToolRuntimeConfig(
       allowedExecutables: CODING_ALLOWED_EXECUTABLES.map((rule) => ({
         executable: rule.executable,
         argsPrefix: [...rule.argsPrefix],
+        argsMatch: rule.argsMatch,
       })),
       // 本里程碑不会询问或恢复审批，因此不能把通用 loop 的 install/push
       // 审批规则暴露给 coding Agent；不在诊断白名单内的命令一律直接拒绝。

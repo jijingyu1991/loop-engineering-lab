@@ -5,6 +5,7 @@ import { RunContext } from "@openai/agents";
 
 import { createCodingTools } from "../../src/agents/tools/create-coding-tools.js";
 import { createToolOutcomeRecorder } from "../../src/agents/tools/tool-outcome-recorder.js";
+import { resolveShellPermission } from "../../src/agents/tools/tool-permission.js";
 import {
   createCodingToolRuntimeConfig,
   createToolRuntimeConfig,
@@ -44,9 +45,13 @@ test("narrows the coding shell policy without changing the default runtime", () 
   const codingRuntime = createCodingToolRuntimeConfig(defaultRuntime);
 
   assert.deepEqual(codingRuntime.shell.allowedExecutables, [
-    { executable: "npm", argsPrefix: ["test"] },
-    { executable: "npm", argsPrefix: ["run", "build"] },
-    { executable: "git", argsPrefix: ["status"] },
+    { executable: "npm", argsPrefix: ["test"], argsMatch: "exact" },
+    {
+      executable: "npm",
+      argsPrefix: ["run", "build"],
+      argsMatch: "exact",
+    },
+    { executable: "git", argsPrefix: ["status"], argsMatch: "exact" },
   ]);
   assert.deepEqual(codingRuntime.shell.approvalRequiredExecutables, []);
   assert.ok(
@@ -55,6 +60,43 @@ test("narrows the coding shell policy without changing the default runtime", () 
     ),
   );
   assert.notEqual(codingRuntime.shell, defaultRuntime.shell);
+});
+
+test("allows exact coding diagnostics and denies prefix-tail escapes", () => {
+  const shell = createCodingToolRuntimeConfig(configuredRuntime()).shell;
+
+  assert.equal(
+    resolveShellPermission({ executable: "npm", args: ["test"] }, shell),
+    "allowed",
+  );
+  assert.equal(
+    resolveShellPermission(
+      { executable: "npm", args: ["run", "build"] },
+      shell,
+    ),
+    "allowed",
+  );
+  assert.equal(
+    resolveShellPermission({ executable: "git", args: ["status"] }, shell),
+    "allowed",
+  );
+  assert.equal(
+    resolveShellPermission(
+      {
+        executable: "npm",
+        args: ["run", "build", "--", "--outDir", "/tmp/out"],
+      },
+      shell,
+    ),
+    "denied",
+  );
+  assert.equal(
+    resolveShellPermission(
+      { executable: "git", args: ["status", "--short"] },
+      shell,
+    ),
+    "denied",
+  );
 });
 
 test("assembles only read, search, and policy-limited shell tools", () => {

@@ -6,10 +6,14 @@ function matchesRule(
   input: { executable: string; args: string[] },
   rule: ExecutableRule,
 ): boolean {
-  return (
+  const prefixMatches =
     input.executable === rule.executable &&
-    rule.argsPrefix.every((value, index) => input.args[index] === value)
-  );
+    rule.argsPrefix.every((value, index) => input.args[index] === value);
+
+  // 未声明 argsMatch 的所有既有规则继续采用 prefix 匹配；只有 composition
+  // 显式标记 exact 时，参数数量也必须相等，从能力边界阻断尾参数逃逸。
+  return prefixMatches &&
+    (rule.argsMatch !== "exact" || input.args.length === rule.argsPrefix.length);
 }
 
 /**

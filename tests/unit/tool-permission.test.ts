@@ -20,6 +20,13 @@ test("distinguishes allowed, approval-required, and denied commands", () => {
   );
   assert.equal(
     resolveShellPermission(
+      { executable: "git", args: ["status", "--short"] },
+      rules,
+    ),
+    "allowed",
+  );
+  assert.equal(
+    resolveShellPermission(
       { executable: "git", args: ["push", "origin", "main"] },
       rules,
     ),
@@ -27,6 +34,35 @@ test("distinguishes allowed, approval-required, and denied commands", () => {
   );
   assert.equal(
     resolveShellPermission({ executable: "git", args: ["clean", "-fd"] }, rules),
+    "denied",
+  );
+});
+
+test("exact rules reject arguments beyond the declared command", () => {
+  const exactRules = {
+    allowedExecutables: [{
+      executable: "npm",
+      argsPrefix: ["run", "build"],
+      argsMatch: "exact" as const,
+    }],
+    approvalRequiredExecutables: [],
+  };
+
+  assert.equal(
+    resolveShellPermission(
+      { executable: "npm", args: ["run", "build"] },
+      exactRules,
+    ),
+    "allowed",
+  );
+  assert.equal(
+    resolveShellPermission(
+      {
+        executable: "npm",
+        args: ["run", "build", "--", "--outDir", "/tmp/out"],
+      },
+      exactRules,
+    ),
     "denied",
   );
 });
