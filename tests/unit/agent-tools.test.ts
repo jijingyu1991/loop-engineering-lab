@@ -53,6 +53,24 @@ test("registers file, search, and shell tools on the actor", () => {
   );
 });
 
+test("requires explicit execution tasks to call the matching tool first", () => {
+  const agent = createActorAgent(modelConfig, []);
+
+  assert.equal(typeof agent.instructions, "string");
+  assert.match(
+    String(agent.instructions),
+    /explicitly asks to execute a shell command, you must call workspace_shell/,
+  );
+  assert.match(
+    String(agent.instructions),
+    /Approval must be requested through the tool call interruption/,
+  );
+  assert.match(
+    String(agent.instructions),
+    /Never return final structured output before the required tool call finishes/,
+  );
+});
+
 test("keeps adapter validation failures structured and traceable", async () => {
   const traceWriter = new MemoryTraceWriter();
   const tools = createAgentTools(runtime, traceWriter, createToolOutcomeRecorder());

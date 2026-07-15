@@ -1,14 +1,12 @@
-import type {
-  Agent,
-  RunToolApprovalItem,
-  Runner,
-} from "@openai/agents";
+import type { RunToolApprovalItem, Runner } from "@openai/agents";
 
 import type {
   ApprovalDecision,
   ApprovalHandler,
   ApprovalRequest,
 } from "../../agents/terminal-approval-handler.js";
+import type { ActorAgent } from "../../agents/create-agent.js";
+import type { ToolOutcomeRecorder } from "../../agents/tools/tool-outcome-recorder.js";
 import { createToolError } from "../../agents/tools/tool-result.js";
 import type {
   ActData,
@@ -20,12 +18,13 @@ import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
 
 export interface ActInput {
   runner: Runner;
-  agent: Agent;
+  agent: ActorAgent;
   observation: ObserveData;
   plan: PlanData;
   maxTurns: number;
   traceWriter?: TraceWriter;
   approvalHandler?: ApprovalHandler;
+  outcomeRecorder: ToolOutcomeRecorder;
   now?: () => string;
 }
 
@@ -101,6 +100,7 @@ export async function runAct(input: ActInput): Promise<StepOutcome<ActData>> {
   const traceWriter = input.traceWriter ?? { write: async () => undefined };
   const approvalHandler = input.approvalHandler ?? (async () => "unavailable" as const);
   const now = input.now ?? (() => new Date().toISOString());
+  const toolCheckpoint = input.outcomeRecorder.checkpoint();
   let result = await input.runner.run(input.agent, prompt, {
     maxTurns: input.maxTurns,
   });
@@ -134,6 +134,7 @@ export async function runAct(input: ActInput): Promise<StepOutcome<ActData>> {
         result.state.approve(interruption);
       } else {
         const error = approvalFailure(decision, request);
+        input.outcomeRecorder.recordFailure(error);
         result.state.reject(interruption, {
           message: JSON.stringify({ ok: false, error }),
         });
@@ -157,15 +158,24 @@ export async function runAct(input: ActInput): Promise<StepOutcome<ActData>> {
     });
   }
 
-  if (typeof result.finalOutput !== "string" || !result.finalOutput.trim()) {
-    throw new Error("Agent returned an empty text output");
+  if (!result.finalOutput) {
+    throw new Error("Agent returned no structured output");
   }
 
+  const terminal =
+    result.finalOutput.outcome === "failed" ||
+    result.finalOutput.outcome === "blocked" ||
+    result.finalOutput.outcome === "cancelled";
+
   return {
-    data: { output: result.finalOutput.trim() },
+    data: {
+      output: result.finalOutput.output,
+      outcome: result.finalOutput.outcome,
+      toolErrors: input.outcomeRecorder.failuresSince(toolCheckpoint),
+    },
     decision: {
-      nextStep: "verify",
-      reason: "action_completed",
+      nextStep: terminal ? "stop" : "verify",
+      reason: terminal ? "action_terminal" : "action_completed",
     },
   };
 }

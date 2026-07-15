@@ -31,7 +31,11 @@ test("runs seven stages in order for three iterations", async () => {
     act: async ({ observation }) => {
       actionCalls += 1;
       return {
-        data: { output: `${observation.task} result ${actionCalls}` },
+        data: {
+          output: `${observation.task} result ${actionCalls}`,
+          outcome: actionCalls >= 3 ? "succeeded" : "continue",
+          toolErrors: [],
+        },
         decision: {
           nextStep: "verify",
           reason: "action_completed",
@@ -90,7 +94,11 @@ test("follows an action decision that jumps directly to stop", async () => {
     maxTurns: 5,
     traceWriter,
     act: async () => ({
-      data: { output: "Enough evidence to stop" },
+      data: {
+        output: "Enough evidence to stop",
+        outcome: "succeeded",
+        toolErrors: [],
+      },
       decision: {
         nextStep: "stop",
         reason: "action_requested_stop",

@@ -1,5 +1,6 @@
 import type { StageResult } from "./stage-result.js";
 import type { StopDecision } from "./stop-decision.js";
+import type { ToolError } from "./tool-error.js";
 
 export const LOOP_STAGE_ORDER = [
   "observe",
@@ -50,6 +51,8 @@ export interface PlanData {
 
 export interface ActData {
   output: string;
+  outcome: ActOutcome;
+  toolErrors: ToolError[];
 }
 
 export interface VerifyData {

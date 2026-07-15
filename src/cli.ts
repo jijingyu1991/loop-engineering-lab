@@ -60,6 +60,7 @@ export async function runConfiguredLoop(
         maxTurns,
         traceWriter,
         approvalHandler,
+        outcomeRecorder,
       }),
   });
 }

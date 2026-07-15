@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { toProviderOptions } from "../../src/agents/providers/create-model-provider.js";
+import { OpenAIProvider } from "@openai/agents";
+
+import {
+  createModelProvider,
+  toProviderOptions,
+} from "../../src/agents/providers/create-model-provider.js";
 import type { ModelConfig } from "../../src/config/config-schema.js";
 
 const gptConfig: ModelConfig = {
@@ -32,4 +37,15 @@ test("maps DeepSeek configuration to Chat Completions", () => {
   assert.equal(options.useResponses, false);
   assert.equal(options.baseURL, "https://api.deepseek.com");
   assert.equal(options.apiKey, "deepseek-test-key");
+});
+
+test("keeps Responses on the native provider and wraps Chat Completions", () => {
+  const responsesProvider = createModelProvider(gptConfig, "openai-test-key");
+  const chatCompletionsProvider = createModelProvider(
+    deepSeekConfig,
+    "deepseek-test-key",
+  );
+
+  assert.ok(responsesProvider instanceof OpenAIProvider);
+  assert.equal(chatCompletionsProvider instanceof OpenAIProvider, false);
 });

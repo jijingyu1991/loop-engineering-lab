@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Agent, Runner } from "@openai/agents";
+import type { Runner } from "@openai/agents";
 
+import type { ActorAgent } from "../../src/agents/create-agent.js";
+import { createToolOutcomeRecorder } from "../../src/agents/tools/tool-outcome-recorder.js";
 import "../../src/domain/step-decision.js";
 import type { StepOutcome } from "../../src/domain/step-decision.js";
 import type { PlanData } from "../../src/domain/loop-step.js";
@@ -52,14 +54,18 @@ test("stages return the current default route", async () => {
   });
 
   const runner = {
-    run: async () => ({ finalOutput: "Agent result", interruptions: [] }),
+    run: async () => ({
+      finalOutput: { output: "Agent result", outcome: "continue" },
+      interruptions: [],
+    }),
   } as unknown as Runner;
   const action = await runAct({
     runner,
-    agent: {} as Agent,
+    agent: {} as ActorAgent,
     observation: observation.data,
     plan: plan.data,
     maxTurns: 5,
+    outcomeRecorder: createToolOutcomeRecorder(),
   });
   assert.deepEqual(action.decision, {
     nextStep: "verify",

@@ -1,6 +1,7 @@
-import { OpenAIProvider } from "@openai/agents";
+import { OpenAIProvider, type ModelProvider } from "@openai/agents";
 
 import type { ModelConfig } from "../../config/config-schema.js";
+import { createJsonObjectModelProvider } from "./create-json-object-model-provider.js";
 
 export interface ProviderOptions {
   apiKey: string;
@@ -27,6 +28,12 @@ export function toProviderOptions(
 export function createModelProvider(
   modelConfig: ModelConfig,
   apiKey: string,
-): OpenAIProvider {
-  return new OpenAIProvider(toProviderOptions(modelConfig, apiKey));
+): ModelProvider {
+  const provider = new OpenAIProvider(toProviderOptions(modelConfig, apiKey));
+
+  // Responses API 原生支持 Agent 的 JSON Schema 输出；DeepSeek 使用兼容的
+  // Chat Completions API，只接受 JSON Object，因此仅在该 provider 分支增加适配。
+  return modelConfig.api === "chat_completions"
+    ? createJsonObjectModelProvider(provider)
+    : provider;
 }
