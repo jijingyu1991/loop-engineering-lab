@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { runCodingMode } from "../../src/modes/coding/run-coding-mode.js";
+import type { CodingExecutor } from "../../src/modes/coding/coding-state.js";
 import type { CodingTaskType } from "../../src/modes/coding/coding-task.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
@@ -249,4 +250,61 @@ test("rejects an empty request before writing the start trace", async () => {
     /must not be empty/i,
   );
   assert.deepEqual(traceWriter.events, []);
+});
+
+test("rejects an invalid maxSteps before writing the start trace", async () => {
+  const traceWriter = new MemoryTraceWriter();
+
+  await assert.rejects(
+    runCodingMode({
+      request: "Explain the module",
+      activeModel: "test-model",
+      tracePath: "traces/invalid-max-steps.jsonl",
+      maxSteps: 0,
+      traceWriter,
+      classifier: async () => {
+        throw new Error("classifier must not run");
+      },
+      executor: async () => {
+        throw new Error("executor must not run");
+      },
+    }),
+    /maxSteps must be a positive integer/,
+  );
+  assert.deepEqual(traceWriter.events, []);
+});
+
+test("forces failed status when an unknown workflow reason maps to runtime_error", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  // TypeScript 会阻止 adapter 返回未知 reason；这里故意模拟一个绕过静态合同的运行时
+  // 违约值，验证 coordinator 的最后一道防线不会产生 completed + runtime_error。
+  const executor = (async () => ({
+    type: "stopped",
+    status: "cancelled",
+    reason: "future_unknown_reason",
+  })) as unknown as CodingExecutor;
+
+  const result = await runCodingMode({
+    request: "Explain the module",
+    activeModel: "test-model",
+    tracePath: "traces/unknown-reason.jsonl",
+    maxSteps: 2,
+    traceWriter,
+    classifier: async () => ({
+      taskType: "explain_module",
+      objective: "Explain it",
+      reason: "Explanation requested",
+    }),
+    executor,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.stopReason, "runtime_error");
+  const terminalEvent = traceWriter.events.at(-1);
+  assert.ok(terminalEvent);
+  assert.equal(terminalEvent.event, "coding_run_stopped");
+  if (terminalEvent.event === "coding_run_stopped") {
+    assert.equal(terminalEvent.status, "failed");
+    assert.equal(terminalEvent.stopReason, "runtime_error");
+  }
 });

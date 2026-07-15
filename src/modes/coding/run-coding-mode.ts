@@ -34,6 +34,20 @@ function mapStopReason(reason: string): CodingStopReason {
     : "runtime_error";
 }
 
+function mapWorkflowTerminal(input: {
+  status: WorkflowStatus;
+  stopReason: string;
+}): { status: WorkflowStatus; stopReason: CodingStopReason } {
+  const stopReason = mapStopReason(input.stopReason);
+
+  // 未知 reason 表示运行时数据已经越过静态合同。此时即便上游错误地携带
+  // completed/cancelled，也必须降级为 failed，避免产生自相矛盾的成功终态。
+  return {
+    status: stopReason === "runtime_error" ? "failed" : input.status,
+    stopReason,
+  };
+}
+
 function createTerminal(input: {
   timestamp: string;
   status: WorkflowStatus;
@@ -78,6 +92,11 @@ export async function runCodingMode(input: {
   const request = input.request.trim();
   if (!request) {
     throw new Error("Coding request must not be empty");
+  }
+  // 与 request 一样，运行安全边界必须在 start trace 前验证。否则无效配置会留下
+  // 一个已经启动、却永远没有 terminal event 的虚假运行记录。
+  if (!Number.isInteger(input.maxSteps) || input.maxSteps <= 0) {
+    throw new RangeError("maxSteps must be a positive integer");
   }
 
   const now = input.now ?? (() => new Date().toISOString());
@@ -129,11 +148,15 @@ export async function runCodingMode(input: {
     traceWriter: input.traceWriter,
     now,
   });
+  const mappedTerminal = mapWorkflowTerminal({
+    status: workflowResult.status,
+    stopReason: workflowResult.stopReason,
+  });
   const terminal = createTerminal({
     timestamp: now(),
-    status: workflowResult.status,
+    status: mappedTerminal.status,
     taskType: classification.taskType,
-    stopReason: mapStopReason(workflowResult.stopReason),
+    stopReason: mappedTerminal.stopReason,
     completedSteps: workflowResult.completedSteps,
     finalOutput: workflowResult.state.output,
     tracePath: input.tracePath,
