@@ -14,7 +14,34 @@ import { loadLoopConfig } from "./config/load-config.js";
 import type { LoopState } from "./domain/loop-state.js";
 import { runLoop } from "./loop/loop-runner.js";
 import { runAct } from "./loop/stages/act.js";
+import { runConfiguredCodingMode } from "./modes/coding/run-configured-coding-mode.js";
 import { createRunTraceWriter } from "./trace/create-run-trace-writer.js";
+
+export type CliInvocation =
+  | { mode: "loop"; request: string }
+  | { mode: "coding"; request: string };
+
+/**
+ * `coding` 是显式子命令；其余输入继续走原有 loop 模式，避免改变既有脚本调用。
+ * 两条路径分别保留清晰的 usage，使缺少自然语言请求时在任何 runtime 创建前失败。
+ */
+export function parseCliInvocation(args: string[]): CliInvocation {
+  if (args[0] === "coding") {
+    const request = args.slice(1).join(" ").trim();
+    if (!request) {
+      throw new Error('Usage: npm run loop -- coding "your request"');
+    }
+
+    return { mode: "coding", request };
+  }
+
+  const request = args.join(" ").trim();
+  if (!request) {
+    throw new Error('Usage: npm run loop -- "your task"');
+  }
+
+  return { mode: "loop", request };
+}
 
 /**
  * 在入口处一次性组装基础设施，再把小而明确的依赖交给 loop。这里是唯一了解
@@ -66,12 +93,20 @@ export async function runConfiguredLoop(
 }
 
 async function main(): Promise<void> {
-  const task = process.argv.slice(2).join(" ").trim();
-  if (!task) {
-    throw new Error('Usage: npm run loop -- "your task"');
+  const invocation = parseCliInvocation(process.argv.slice(2));
+
+  if (invocation.mode === "coding") {
+    const result = await runConfiguredCodingMode(invocation.request);
+    console.log(JSON.stringify(result, null, 2));
+
+    // blocked/cancelled 是可解释的 workflow 终态，不应被 CLI 伪装成 runtime crash。
+    if (result.status === "failed") {
+      process.exitCode = 1;
+    }
+    return;
   }
 
-  const state = await runConfiguredLoop(task);
+  const state = await runConfiguredLoop(invocation.request);
   console.log(
     JSON.stringify(
       {
