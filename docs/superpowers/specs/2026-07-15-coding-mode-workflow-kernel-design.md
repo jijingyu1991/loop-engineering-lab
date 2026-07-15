@@ -276,7 +276,10 @@ output, and trace path as structured JSON.
   the shell tool executed successfully.
 - Trace write failures propagate immediately. A run without a trustworthy
   audit chain cannot report completion.
-- No workflow may write files in the first milestone.
+- No workflow may intentionally edit source files in the first milestone, and
+  the coding Agent receives no writable file tool. Permission-checked test and
+  build commands may still create temporary files or generated output such as
+  `dist/`; those command side effects are not treated as source-code edits.
 
 ## Future Context Architecture
 
@@ -362,4 +365,3 @@ This milestone delivers:
 
 It does not deliver file editing, automatic fixes, context compaction,
 subagents, parallel execution, diff review, or automatic commits.
-

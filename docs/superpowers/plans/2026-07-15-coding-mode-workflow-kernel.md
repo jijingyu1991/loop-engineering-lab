@@ -13,7 +13,7 @@
 - Use strict TypeScript, ESM imports ending in `.js`, two-space indentation, double quotes, and semicolons.
 - Add detailed Chinese comments around important logic, including data flow, failure handling, and boundaries.
 - Preserve `npm run loop -- "普通任务"` behavior.
-- Coding mode is read-only: it may read, search, and run permission-checked commands, but it must not expose a file-write tool.
+- Coding mode must not intentionally edit source files or expose a file-write tool. Permission-checked test and build commands may create temporary files or generated output such as `dist/`.
 - A request for implementation maps to a read-only implementation plan and must state that no files were modified.
 - Every coding run writes a per-run JSONL trace and ends with an explicit stop reason whenever its trace writer remains available.
 - Trace write failures propagate; a run with an untrustworthy trace must never report success.
