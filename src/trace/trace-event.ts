@@ -6,6 +6,10 @@ import type {
   ToolEvidence,
 } from "../agents/tools/tool-result.js";
 import type { StopReason } from "../domain/stop-decision.js";
+import type {
+  WorkflowEvidence,
+  WorkflowTransition,
+} from "../runtime/workflow-types.js";
 
 export type LocalToolName = "file" | "search" | "shell";
 
@@ -81,6 +85,37 @@ export interface ToolApprovalResolvedEvent {
   decision: "approved" | "rejected" | "unavailable";
 }
 
+export interface WorkflowStepStartedEvent {
+  event: "workflow_step_started";
+  timestamp: string;
+  step: string;
+  stepIndex: number;
+}
+
+export interface WorkflowStepCompletedEvent {
+  event: "workflow_step_completed";
+  timestamp: string;
+  step: string;
+  stepIndex: number;
+  evidence: WorkflowEvidence[];
+}
+
+export interface WorkflowStepFailedEvent {
+  event: "workflow_step_failed";
+  timestamp: string;
+  step: string;
+  stepIndex: number;
+  error: StepError;
+}
+
+export interface WorkflowTransitionDecidedEvent {
+  event: "workflow_transition_decided";
+  timestamp: string;
+  step: string;
+  stepIndex: number;
+  transition: WorkflowTransition;
+}
+
 export type TraceEvent =
   | LoopStartedEvent
   | StageTraceEvent
@@ -89,4 +124,8 @@ export type TraceEvent =
   | ToolCompletedEvent
   | ToolFailedEvent
   | ToolApprovalRequestedEvent
-  | ToolApprovalResolvedEvent;
+  | ToolApprovalResolvedEvent
+  | WorkflowStepStartedEvent
+  | WorkflowStepCompletedEvent
+  | WorkflowStepFailedEvent
+  | WorkflowTransitionDecidedEvent;
