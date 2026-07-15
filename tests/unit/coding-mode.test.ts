@@ -56,6 +56,7 @@ for (const [taskType, expectedStopReason] of cases) {
   test(`runs the ${taskType} workflow to its task-specific stop reason`, async () => {
     const traceWriter = new MemoryTraceWriter();
     let receivedInstructions = "";
+    let executionCalls = 0;
 
     const result = await runCodingMode({
       request: "  Inspect the request  ",
@@ -69,6 +70,7 @@ for (const [taskType, expectedStopReason] of cases) {
         reason: "Matched test workflow",
       }),
       executor: async (input) => {
+        executionCalls += 1;
         receivedInstructions = input.instructions;
         return {
           type: "completed",
@@ -86,6 +88,7 @@ for (const [taskType, expectedStopReason] of cases) {
     });
 
     assert.equal(result.taskType, taskType);
+    assert.equal(executionCalls, 1);
     assert.equal(result.status, "completed");
     assert.equal(result.stopReason, expectedStopReason);
     assert.equal(

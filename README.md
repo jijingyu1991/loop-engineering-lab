@@ -153,6 +153,44 @@ CLI 最终会输出：
 - 工具失败时完整的 type、retryable、userActionRequired、suggestedNextStep 和 evidence；
 - 最终状态、完成轮数和停止原因。
 
+## Coding mode
+
+在普通 Loop 任务前加入 `coding` 子命令，就会进入面向代码库阅读与诊断的只读
+workflow：
+
+```bash
+npm run loop -- coding "帮我查看 loop 模块代码"
+npm run loop -- coding "帮我查找 trace 相关文件"
+npm run loop -- coding "帮我诊断 npm test 的失败"
+npm run loop -- coding "帮我实现一个 login 页面"
+```
+
+Coding mode 会先把自然语言请求分类为三个核心任务类型：
+
+- `explain_module`：读取相关代码，以仓库证据解释职责、入口、依赖、数据流和失败边界；
+- `find_related_files`：搜索并按关系整理相关文件，无匹配时返回明确的空结果；
+- `diagnose_test_failure`：运行范围尽可能小的测试、检查失败证据，并给出根因假设和下一步。
+
+当请求要求实现、修改或新增功能时，当前里程碑不会写代码，而是回退到
+`propose_implementation_plan`：它仍会执行一次只读 workflow，结合仓库约定给出可能涉及
+的文件、实施步骤、测试和风险，并明确说明 `No files were modified.`。Coding mode 目前只向
+Agent 暴露文件读取、workspace 搜索和经过权限检查的 shell 工具，不暴露文件编辑能力，
+因此包括 implementation-plan fallback 在内的所有路径都不会修改文件。
+
+命令结束时会输出结构化结果，字段含义如下：
+
+- `status`：运行终态，例如 `completed`、`failed` 或 `blocked`；
+- `taskType`：分类得到的 Coding 任务类型；分类失败时为 `null`；
+- `stopReason`：workflow 停止原因；
+- `completedSteps`：实际完成的 workflow 步骤数；
+- `finalOutput`：Agent 的最终文本；没有可返回输出时为 `null`；
+- `tracePath`：本次运行对应的 JSONL trace 文件路径。
+
+四种成功停止原因分别是 `explanation_completed`、`related_files_identified`、
+`diagnosis_completed` 和 `implementation_plan_completed`，与上述四条执行路径一一对应。
+每次 Coding mode 运行都会创建自己的结构化 JSONL trace，记录分类、workflow step、证据、
+transition 和最终终态，便于独立审计一次运行而不与其他任务混合。
+
 ## 两种“最大次数”
 
 配置中有两个容易混淆、但作用完全不同的安全限制：
