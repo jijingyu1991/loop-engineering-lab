@@ -46,12 +46,12 @@ trace 保存发生过什么，context pack 只保存本次调用需要知道什�
 
 ## 3. 四层模型
 
-| 层 | 作用域 | 典型生命周期 | 主要内容 | 默认裁剪优先级 |
-| --- | --- | --- | --- | --- |
-| stable prefix | Harness / Agent 版本 | 跨任务，随版本显式失效 | 系统规则、安全约束、核心工具索引与长期约束 | 最后裁剪 |
-| task context | 单次任务 | 从接收任务到终态 | 目标、验收标准、计划、当前状态 | 次后裁剪 |
-| evidence context | 任务或当前阶段 | 来源变化、过期或任务结束时失效 | 文件片段、测试结果、工具输出摘要 | 较早裁剪 |
-| volatile context | 最近若干步 | 短 TTL、阶段结束或被证伪时失效 | 近期错误、临时假设、最近尝试 | 最先裁剪 |
+| 层               | 作用域               | 典型生命周期                   | 主要内容                                   | 默认裁剪优先级 |
+| ---------------- | -------------------- | ------------------------------ | ------------------------------------------ | -------------- |
+| stable prefix    | Harness / Agent 版本 | 跨任务，随版本显式失效         | 系统规则、安全约束、核心工具索引与长期约束 | 最后裁剪       |
+| task context     | 单次任务             | 从接收任务到终态               | 目标、验收标准、计划、当前状态             | 次后裁剪       |
+| evidence context | 任务或当前阶段       | 来源变化、过期或任务结束时失效 | 文件片段、测试结果、工具输出摘要           | 较早裁剪       |
+| volatile context | 最近若干步           | 短 TTL、阶段结束或被证伪时失效 | 近期错误、临时假设、最近尝试               | 最先裁剪       |
 
 “默认裁剪优先级”不等于绝对重要性。例如直接证明验收失败的测试结果可能比一段可选的
 任务背景更重要。每个条目仍需携带 `priority`，层级只提供默认值和生命周期边界。
@@ -268,12 +268,12 @@ volatile context: recent error + temporary hypothesis + next check
 预算应由模型能力和任务类型计算，而不是写死绝对 token。先从 context window 中扣除
 输出预留与 5%–10% 的安全余量，再为所得输入预算设置以下软上限：
 
-| 区域 | 输入预算建议 | 说明 |
-| --- | --- | --- |
-| stable prefix | 必需内容，通常不超过输入预算的 20% | 超限时应重构稳定规则，不应日常截断 |
-| task context | 15%–25% | 目标和当前状态必须完整 |
-| evidence context | 35%–50% | 随检索结果动态分配 |
-| volatile context | 5%–10% | 严格 TTL，只保留最近相关项 |
+| 区域             | 输入预算建议                       | 说明                               |
+| ---------------- | ---------------------------------- | ---------------------------------- |
+| stable prefix    | 必需内容，通常不超过输入预算的 20% | 超限时应重构稳定规则，不应日常截断 |
+| task context     | 15%–25%                            | 目标和当前状态必须完整             |
+| evidence context | 35%–50%                            | 随检索结果动态分配                 |
+| volatile context | 5%–10%                             | 严格 TTL，只保留最近相关项         |
 
 模型输出预算在计算上述“输入预算”前先行扣除。例如：
 
@@ -299,77 +299,68 @@ Harness 不能为了“成功发出请求”而产生语义不完整、但表面
 ## 11. TypeScript 契约草案
 
 ```ts
-export type ContextLayer = "stable" | "task" | "evidence" | "volatile";
+export type ContextLayer = 'stable' | 'task' | 'evidence' | 'volatile'
 
 export interface ContextSource {
-  kind: "system" | "user" | "file" | "test" | "tool" | "trace";
-  reference: string;
-  revision?: string;
+  kind: 'system' | 'user' | 'file' | 'test' | 'tool' | 'trace'
+  reference: string
+  revision?: string
 }
 
 export interface BaseContextItem {
-  id: string;
-  content: string;
-  source: ContextSource;
-  priority: number;
-  tokenEstimate: number;
-  createdAt: string;
-  stale: boolean;
-  contentHash: string;
+  id: string
+  content: string
+  source: ContextSource
+  priority: number
+  tokenEstimate: number
+  createdAt: string
+  stale: boolean
+  contentHash: string
 }
 
 export interface StableContextItem extends BaseContextItem {
-  layer: "stable";
-  mandatory: boolean;
-  stablePrefixVersion: string;
+  layer: 'stable'
+  mandatory: boolean
+  stablePrefixVersion: string
 }
 
 export interface TaskContextItem extends BaseContextItem {
-  layer: "task";
-  taskId: string;
-  kind:
-    | "goal"
-    | "acceptance_criteria"
-    | "plan"
-    | "state"
-    | "selected_tool_contract";
-  state: "active" | "completed" | "blocked";
+  layer: 'task'
+  taskId: string
+  kind: 'goal' | 'acceptance_criteria' | 'plan' | 'state' | 'selected_tool_contract'
+  state: 'active' | 'completed' | 'blocked'
 }
 
 export interface EvidenceContextItem extends BaseContextItem {
-  layer: "evidence";
-  capturedAt: string;
-  relevance: number;
-  freshness: "fresh" | "stale" | "unknown";
-  trust: "authoritative" | "direct" | "derived";
+  layer: 'evidence'
+  capturedAt: string
+  relevance: number
+  freshness: 'fresh' | 'stale' | 'unknown'
+  trust: 'authoritative' | 'direct' | 'derived'
 }
 
 export interface VolatileContextItem extends BaseContextItem {
-  layer: "volatile";
-  kind: "error" | "attempt" | "hypothesis" | "next_check";
-  expiresAfterStep?: number;
-  expiresAtStageEnd?: boolean;
+  layer: 'volatile'
+  kind: 'error' | 'attempt' | 'hypothesis' | 'next_check'
+  expiresAfterStep?: number
+  expiresAtStageEnd?: boolean
 }
 
-export type ContextItem =
-  | StableContextItem
-  | TaskContextItem
-  | EvidenceContextItem
-  | VolatileContextItem;
+export type ContextItem = StableContextItem | TaskContextItem | EvidenceContextItem | VolatileContextItem
 
 export interface ContextBudget {
-  contextWindow: number;
-  reservedOutput: number;
-  safetyMargin: number;
-  layerLimits: Record<ContextLayer, number>;
+  contextWindow: number
+  reservedOutput: number
+  safetyMargin: number
+  layerLimits: Record<ContextLayer, number>
 }
 
 export interface PackedContext {
-  stablePrefixVersion: string;
-  items: ContextItem[];
-  renderedPrompt: string;
-  estimatedInputTokens: number;
-  dropped: Array<{ id: string; reason: string }>;
+  stablePrefixVersion: string
+  items: ContextItem[]
+  renderedPrompt: string
+  estimatedInputTokens: number
+  dropped: Array<{ id: string; reason: string }>
 }
 ```
 
@@ -383,33 +374,24 @@ tokens、延迟和费用，但这些 telemetry 不改变 packing 语义。
 ## 12. Packing 伪代码
 
 ```ts
-function packContext(
-  candidates: ContextItem[],
-  budget: ContextBudget,
-): PackedContext {
+function packContext(candidates: ContextItem[], budget: ContextBudget): PackedContext {
   const active = candidates
     .filter((item) => !isExpired(item))
-    .filter((item) => !item.stale || needsConflictHistory(item));
+    .filter((item) => !item.stale || needsConflictHistory(item))
 
-  const deduplicated = deduplicateBySourceAndHash(active);
-  const grouped = groupByLayer(deduplicated);
+  const deduplicated = deduplicateBySourceAndHash(active)
+  const grouped = groupByLayer(deduplicated)
 
-  const stable = requireMandatoryStableItems(grouped.stable);
-  const task = selectTaskState(grouped.task, budget.layerLimits.task);
-  const evidence = selectByRelevanceFreshnessAndPriority(
-    grouped.evidence,
-    budget.layerLimits.evidence,
-  );
-  const volatile = selectRecentRelevantItems(
-    grouped.volatile,
-    budget.layerLimits.volatile,
-  );
+  const stable = requireMandatoryStableItems(grouped.stable)
+  const task = selectTaskState(grouped.task, budget.layerLimits.task)
+  const evidence = selectByRelevanceFreshnessAndPriority(grouped.evidence, budget.layerLimits.evidence)
+  const volatile = selectRecentRelevantItems(grouped.volatile, budget.layerLimits.volatile)
 
-  const selected = [stable, task, evidence, volatile].flat();
-  const compressed = compressOverflowWithoutChangingClaims(selected, budget);
-  assertMandatoryRulesAndGoalRemain(compressed);
+  const selected = [stable, task, evidence, volatile].flat()
+  const compressed = compressOverflowWithoutChangingClaims(selected, budget)
+  assertMandatoryRulesAndGoalRemain(compressed)
 
-  return renderWithFixedLayerTemplates(compressed, budget);
+  return renderWithFixedLayerTemplates(compressed, budget)
 }
 ```
 
@@ -420,15 +402,15 @@ function packContext(
 
 当前项目可按以下方式渐进接入，不要求一次重写所有阶段：
 
-| 当前数据 | 目标层 | 说明 |
-| --- | --- | --- |
-| Agent 固定 instruction、核心工具索引、仓库规则 | stable prefix | 从 `act` 的动态 prompt 中分离并版本化 |
-| 当前任务选中的完整工具参数 Schema | task | 按需加载为 `selected_tool_contract`，不用的工具不进入 pack |
-| `LoopState.task` | task | 任务原文只存一份 |
-| plan、当前 step、stop 条件 | task | 使用结构化状态覆盖更新 |
-| 文件读取、测试和工具返回摘要 | evidence | 当前尚未形成统一类型 |
-| `previousAction` 的已验证结论 | evidence 或 task summary | 按内容用途分类，不按字段名机械分类 |
-| `previousReflection`、最近错误、临时 next focus | volatile | 设置一至数步 TTL，避免逐轮无限累积 |
+| 当前数据                                        | 目标层                   | 说明                                                       |
+| ----------------------------------------------- | ------------------------ | ---------------------------------------------------------- |
+| Agent 固定 instruction、核心工具索引、仓库规则  | stable prefix            | 从 `act` 的动态 prompt 中分离并版本化                      |
+| 当前任务选中的完整工具参数 Schema               | task                     | 按需加载为 `selected_tool_contract`，不用的工具不进入 pack |
+| `LoopState.task`                                | task                     | 任务原文只存一份                                           |
+| plan、当前 step、stop 条件                      | task                     | 使用结构化状态覆盖更新                                     |
+| 文件读取、测试和工具返回摘要                    | evidence                 | 当前尚未形成统一类型                                       |
+| `previousAction` 的已验证结论                   | evidence 或 task summary | 按内容用途分类，不按字段名机械分类                         |
+| `previousReflection`、最近错误、临时 next focus | volatile                 | 设置一至数步 TTL，避免逐轮无限累积                         |
 
 `observe` 应负责收集候选项和更新失效状态，独立的 packer 负责预算与渲染，`act` 只消费
 `PackedContext`。这样 Loop 协调、context policy 和 provider adapter 可以分别测试。

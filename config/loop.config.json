@@ -16,7 +16,7 @@
   },
   "safetyLimits": {
     "maxSteps": 3,
-    "maxTurns": 5
+    "maxTurns": 30
   },
   "tools": {
     "workspaceRoot": ".",
