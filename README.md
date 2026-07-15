@@ -155,7 +155,7 @@ CLI 最终会输出：
 
 ## Coding mode
 
-在普通 Loop 任务前加入 `coding` 子命令，就会进入面向代码库阅读与诊断的只读
+在普通 Loop 任务前加入 `coding` 子命令，就会进入面向代码库阅读与诊断的
 workflow：
 
 ```bash
@@ -171,11 +171,15 @@ Coding mode 会先把自然语言请求分类为三个核心任务类型：
 - `find_related_files`：搜索并按关系整理相关文件，无匹配时返回明确的空结果；
 - `diagnose_test_failure`：运行范围尽可能小的测试、检查失败证据，并给出根因假设和下一步。
 
-当请求要求实现、修改或新增功能时，当前里程碑不会写代码，而是回退到
-`propose_implementation_plan`：它仍会执行一次只读 workflow，结合仓库约定给出可能涉及
-的文件、实施步骤、测试和风险，并明确说明 `No files were modified.`。Coding mode 目前只向
-Agent 暴露文件读取、workspace 搜索和经过权限检查的 shell 工具，不暴露文件编辑能力，
-因此包括 implementation-plan fallback 在内的所有路径都不会修改文件。
+当请求要求实现、修改或新增功能时，当前里程碑不会主动编辑源代码，而是回退到
+`propose_implementation_plan`：它仍会执行 workflow，结合仓库约定给出可能涉及的文件、
+实施步骤、测试和风险，并按响应合同明确说明 `No files were modified.`。这句话表示 Agent
+没有执行实现性的文件编辑，不代表运行过程绝不会产生文件系统变化。
+
+Coding mode 目前只向 Agent 暴露文件读取、workspace 搜索和经过权限检查的 shell 工具，
+没有可写的文件工具。经过配置和权限检查的测试、构建等 shell 命令仍可能创建或更新临时
+文件及 `dist/` 等生成物；因此这里的边界是 Coding mode 不会有意编辑源文件，而不是保证
+执行前后 workspace 的每个文件都保持不变。
 
 命令结束时会输出结构化结果，字段含义如下：
 
