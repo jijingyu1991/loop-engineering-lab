@@ -175,6 +175,34 @@ test("returns classification_failed and a terminal trace when classification thr
   }
 });
 
+test("appends the exact no-modification disclosure to a noncompliant implementation plan", async () => {
+  const traceWriter = new MemoryTraceWriter();
+
+  const result = await runCodingMode({
+    request: "Implement login",
+    activeModel: "test-model",
+    tracePath: "traces/plan.jsonl",
+    maxSteps: 2,
+    traceWriter,
+    classifier: async () => ({
+      taskType: "propose_implementation_plan",
+      objective: "Plan login implementation",
+      reason: "The milestone is read-only",
+    }),
+    executor: async () => ({
+      type: "completed",
+      output: "1. Add the route.\n2. Add tests.",
+      evidence: [],
+    }),
+  });
+
+  assert.equal(
+    result.finalOutput,
+    "1. Add the route.\n2. Add tests.\n\nNo files were modified.",
+  );
+  assert.equal(result.stopReason, "implementation_plan_completed");
+});
+
 test("forwards a blocked executor result to the terminal trace", async () => {
   const traceWriter = new MemoryTraceWriter();
 

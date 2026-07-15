@@ -4,7 +4,10 @@ import { createRunner } from "../../agents/create-runner.js";
 import { disableSdkTracing } from "../../agents/disable-sdk-tracing.js";
 import { createCodingTools } from "../../agents/tools/create-coding-tools.js";
 import { createToolOutcomeRecorder } from "../../agents/tools/tool-outcome-recorder.js";
-import { createToolRuntimeConfig } from "../../agents/tools/tool-runtime-config.js";
+import {
+  createCodingToolRuntimeConfig,
+  createToolRuntimeConfig,
+} from "../../agents/tools/tool-runtime-config.js";
 import { loadLoopConfig } from "../../config/load-config.js";
 import { createRunTraceWriter } from "../../trace/create-run-trace-writer.js";
 import {
@@ -36,12 +39,17 @@ export async function runConfiguredCodingMode(
     maxFiles: 20,
   });
   const runner = createRunner(loaded.modelConfig, loaded.apiKey);
-  const toolRuntime = createToolRuntimeConfig(loaded.config, process.cwd());
+  const toolRuntime = createCodingToolRuntimeConfig(
+    createToolRuntimeConfig(loaded.config, process.cwd()),
+  );
   const outcomeRecorder = createToolOutcomeRecorder();
   const tools = createCodingTools(toolRuntime, traceWriter, outcomeRecorder);
   const classifierAgent = createCodingClassifierAgent(loaded.modelConfig);
   const codingAgent = createCodingAgent(loaded.modelConfig, tools);
   const maxTurns = loaded.config.safetyLimits.maxTurns;
+  // 同一 composition clock 同时服务 workflow 与 Agent interruption，避免一次运行
+  // 的 terminal/approval 事件由不同时间源生成而破坏确定性测试与审计排序。
+  const now = () => new Date().toISOString();
 
   return runCodingMode({
     request,
@@ -49,6 +57,7 @@ export async function runConfiguredCodingMode(
     tracePath,
     maxSteps: loaded.config.safetyLimits.maxSteps,
     traceWriter,
+    now,
     classifier: (rawRequest) =>
       classifyCodingRequest(runner, classifierAgent, rawRequest, maxTurns),
     executor: ({
@@ -70,6 +79,8 @@ export async function runConfiguredCodingMode(
         agent: codingAgent,
         prompt,
         maxTurns,
+        traceWriter,
+        now,
       });
     },
   });

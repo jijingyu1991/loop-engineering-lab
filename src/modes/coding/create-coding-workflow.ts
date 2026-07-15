@@ -111,10 +111,17 @@ export function createCodingWorkflow(input: {
             };
           }
 
+          const output = input.taskType === "propose_implementation_plan" &&
+              !executorResult.output.includes("No files were modified.")
+            ? `${executorResult.output}\n\nNo files were modified.`
+            : executorResult.output;
+
           return {
             state: {
               ...state,
-              output: executorResult.output,
+              // disclosure 是 workflow 的运行时后置条件，不能只寄希望于模型遵循
+              // prompt。已有精确句子的输出保持逐字不变，缺失时才确定性补齐。
+              output,
               evidence: [...state.evidence, ...executorResult.evidence],
             },
             evidence: executorResult.evidence,

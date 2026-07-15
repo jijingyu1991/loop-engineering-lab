@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { Runner, Tool } from "@openai/agents";
+import type { RunToolApprovalItem, Runner, Tool } from "@openai/agents";
 
 import {
   classifyCodingRequest,
@@ -14,6 +14,16 @@ import {
 } from "../../src/modes/coding/create-coding-agent.js";
 import { runCodingAgent } from "../../src/modes/coding/run-coding-agent.js";
 import type { ModelConfig } from "../../src/config/config-schema.js";
+import type { TraceEvent } from "../../src/trace/trace-event.js";
+import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
+
+class MemoryTraceWriter implements TraceWriter {
+  public readonly events: TraceEvent[] = [];
+
+  public async write(event: TraceEvent): Promise<void> {
+    this.events.push(event);
+  }
+}
 
 const modelConfig: ModelConfig = {
   model: "gpt-5.4-mini",
@@ -132,15 +142,33 @@ test("requires implementation plans to disclose that no files changed", () => {
 });
 
 test("turns a coding tool interruption into approval_required", async () => {
+  const argumentsJson = JSON.stringify({
+    executable: "git",
+    args: ["push", "https://example.test/sk-secret123456/repo"],
+    cwd: ".",
+  });
+  const interruption = {
+    name: "workspace_shell",
+    arguments: argumentsJson,
+    rawItem: {
+      type: "function_call",
+      callId: "call-coding-1",
+      name: "workspace_shell",
+      arguments: argumentsJson,
+    },
+  } as unknown as RunToolApprovalItem;
   const runner = {
-    run: async () => ({ finalOutput: undefined, interruptions: [{}] }),
+    run: async () => ({ finalOutput: undefined, interruptions: [interruption] }),
   } as unknown as Runner;
+  const traceWriter = new MemoryTraceWriter();
 
   const result = await runCodingAgent({
     runner,
     agent: {} as CodingAgent,
     prompt: "diagnose",
     maxTurns: 5,
+    traceWriter,
+    now: () => "2026-07-15T00:00:00.000Z",
   });
 
   assert.deepEqual(result, {
@@ -148,6 +176,18 @@ test("turns a coding tool interruption into approval_required", async () => {
     status: "blocked",
     reason: "approval_required",
   });
+  assert.deepEqual(traceWriter.events, [{
+    event: "tool_approval_requested",
+    timestamp: "2026-07-15T00:00:00.000Z",
+    tool: "shell",
+    toolCallId: "call-coding-1",
+    input: {
+      executable: "git",
+      arguments: ["push", "https://example.test/[REDACTED]/repo"],
+      argsCount: 2,
+      cwd: ".",
+    },
+  }]);
 });
 
 test("returns runtime_error when the coding agent has no final output", async () => {
@@ -160,6 +200,7 @@ test("returns runtime_error when the coding agent has no final output", async ()
     agent: {} as CodingAgent,
     prompt: "diagnose",
     maxTurns: 5,
+    traceWriter: new MemoryTraceWriter(),
   }), {
     type: "stopped",
     status: "failed",
@@ -185,6 +226,7 @@ test("keeps a nonzero test exit as completed diagnostic evidence", async () => {
     agent: {} as CodingAgent,
     prompt: "diagnose the failing test",
     maxTurns: 5,
+    traceWriter: new MemoryTraceWriter(),
   }), {
     type: "completed",
     ...finalOutput,
