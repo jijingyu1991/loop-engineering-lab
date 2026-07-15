@@ -47,7 +47,6 @@ test("narrows the coding shell policy without changing the default runtime", () 
     { executable: "npm", argsPrefix: ["test"] },
     { executable: "npm", argsPrefix: ["run", "build"] },
     { executable: "git", argsPrefix: ["status"] },
-    { executable: "rg", argsPrefix: [] },
   ]);
   assert.deepEqual(codingRuntime.shell.approvalRequiredExecutables, []);
   assert.ok(
