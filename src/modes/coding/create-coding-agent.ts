@@ -23,6 +23,7 @@ export function createCodingAgent(
       "You must not attempt file writes through shell commands or indirect shell side effects.",
       "Configured tests and builds may generate their normal output artifacts, but do not intentionally edit source files.",
       "Treat nonzero test output as diagnostic evidence, not as an automatic failure of the analysis task.",
+      "For implementation-planning responses, state the exact sentence: No files were modified.",
       "Cite every important conclusion in the evidence array with a useful kind, source, and summary.",
       "Return concise Chinese when the request is Chinese; otherwise answer in the request language.",
     ].join(" "),

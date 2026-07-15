@@ -30,6 +30,15 @@ test("creates a tool-free structured coding classifier", () => {
   assert.match(String(agent.instructions), /create, implement, refactor, or fix code/);
 });
 
+test("forbids presenting a plan fallback as completed implementation", () => {
+  const agent = createCodingClassifierAgent(modelConfig);
+
+  assert.match(
+    String(agent.instructions),
+    /must not present.*propose_implementation_plan.*completed implementation/i,
+  );
+});
+
 test("returns structured classifier output", async () => {
   const expected = {
     taskType: "explain_module" as const,
@@ -111,6 +120,15 @@ test("creates a structured coding agent with supplied tools", () => {
   assert.match(String(agent.instructions), /must not.*file writes.*shell/i);
   assert.match(String(agent.instructions), /nonzero test.*diagnostic evidence/i);
   assert.match(String(agent.instructions), /concise Chinese/i);
+});
+
+test("requires implementation plans to disclose that no files changed", () => {
+  const agent = createCodingAgent(modelConfig, []);
+
+  assert.match(
+    String(agent.instructions),
+    /implementation-planning responses.*No files were modified\./,
+  );
 });
 
 test("turns a coding tool interruption into approval_required", async () => {

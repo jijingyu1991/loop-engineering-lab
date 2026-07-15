@@ -29,6 +29,7 @@ export function createCodingClassifierAgent(
       "Use diagnose_test_failure when the user asks why a test or build failed.",
       "Use propose_implementation_plan when the user asks for an implementation approach or plan.",
       "For this read-only milestone, requests to create, implement, refactor, or fix code must map to propose_implementation_plan.",
+      "You must not present a propose_implementation_plan fallback as a completed implementation.",
       "Keep objective concrete and explain the classification briefly in reason.",
     ].join(" "),
     tools: [],
