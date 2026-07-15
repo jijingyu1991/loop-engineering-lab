@@ -8,8 +8,14 @@ import type {
 import type { StopReason } from "../domain/stop-decision.js";
 import type {
   WorkflowEvidence,
+  WorkflowStatus,
   WorkflowTransition,
 } from "../runtime/workflow-types.js";
+import type { CodingStopReason } from "../modes/coding/coding-state.js";
+import type {
+  CodingTaskClassification,
+  CodingTaskType,
+} from "../modes/coding/coding-task.js";
 
 export type LocalToolName = "file" | "search" | "shell";
 
@@ -116,6 +122,29 @@ export interface WorkflowTransitionDecidedEvent {
   transition: WorkflowTransition;
 }
 
+export interface CodingRunStartedEvent {
+  event: "coding_run_started";
+  timestamp: string;
+  request: string;
+  mode: "coding";
+  activeModel: string;
+}
+
+export interface CodingTaskClassifiedEvent {
+  event: "coding_task_classified";
+  timestamp: string;
+  classification: CodingTaskClassification;
+}
+
+export interface CodingRunStoppedEvent {
+  event: "coding_run_stopped";
+  timestamp: string;
+  status: WorkflowStatus;
+  taskType: CodingTaskType | null;
+  stopReason: CodingStopReason;
+  completedSteps: number;
+}
+
 export type TraceEvent =
   | LoopStartedEvent
   | StageTraceEvent
@@ -128,4 +157,7 @@ export type TraceEvent =
   | WorkflowStepStartedEvent
   | WorkflowStepCompletedEvent
   | WorkflowStepFailedEvent
-  | WorkflowTransitionDecidedEvent;
+  | WorkflowTransitionDecidedEvent
+  | CodingRunStartedEvent
+  | CodingTaskClassifiedEvent
+  | CodingRunStoppedEvent;

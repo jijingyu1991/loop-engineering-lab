@@ -1,0 +1,144 @@
+import { runWorkflow } from "../../runtime/run-workflow.js";
+import type { WorkflowStatus } from "../../runtime/workflow-types.js";
+import type { CodingRunStoppedEvent } from "../../trace/trace-event.js";
+import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
+import { createCodingWorkflow } from "./create-coding-workflow.js";
+import type {
+  CodingExecutor,
+  CodingRunResult,
+  CodingStopReason,
+} from "./coding-state.js";
+import type {
+  CodingClassifier,
+  CodingTaskType,
+} from "./coding-task.js";
+
+const CODING_STOP_REASONS = new Set<CodingStopReason>([
+  "explanation_completed",
+  "related_files_identified",
+  "diagnosis_completed",
+  "implementation_plan_completed",
+  "classification_failed",
+  "workflow_step_failed",
+  "max_workflow_steps_exceeded",
+  "tool_error",
+  "user_action_required",
+  "approval_required",
+  "approval_rejected",
+  "runtime_error",
+]);
+
+function mapStopReason(reason: string): CodingStopReason {
+  return CODING_STOP_REASONS.has(reason as CodingStopReason)
+    ? reason as CodingStopReason
+    : "runtime_error";
+}
+
+function createTerminal(input: {
+  timestamp: string;
+  status: WorkflowStatus;
+  taskType: CodingTaskType | null;
+  stopReason: CodingStopReason;
+  completedSteps: number;
+  finalOutput: string | null;
+  tracePath: string;
+}): { event: CodingRunStoppedEvent; result: CodingRunResult } {
+  // event 与返回值从同一组字段构造，避免某条失败分支只更新其中一份而造成审计不一致。
+  const terminal = {
+    status: input.status,
+    taskType: input.taskType,
+    stopReason: input.stopReason,
+    completedSteps: input.completedSteps,
+  };
+
+  return {
+    event: {
+      event: "coding_run_stopped",
+      timestamp: input.timestamp,
+      ...terminal,
+    },
+    result: {
+      ...terminal,
+      finalOutput: input.finalOutput,
+      tracePath: input.tracePath,
+    },
+  };
+}
+
+export async function runCodingMode(input: {
+  request: string;
+  activeModel: string;
+  tracePath: string;
+  maxSteps: number;
+  traceWriter: TraceWriter;
+  classifier: CodingClassifier;
+  executor: CodingExecutor;
+  now?: () => string;
+}): Promise<CodingRunResult> {
+  const request = input.request.trim();
+  if (!request) {
+    throw new Error("Coding request must not be empty");
+  }
+
+  const now = input.now ?? (() => new Date().toISOString());
+  await input.traceWriter.write({
+    event: "coding_run_started",
+    timestamp: now(),
+    request,
+    mode: "coding",
+    activeModel: input.activeModel,
+  });
+
+  let classification;
+  try {
+    // catch 的边界只包住 classifier。若 coding trace 写入失败，必须直接 reject，
+    // 不能把审计设施故障伪装成一次普通的分类失败。
+    classification = await input.classifier(request);
+  } catch {
+    const terminal = createTerminal({
+      timestamp: now(),
+      status: "failed",
+      taskType: null,
+      stopReason: "classification_failed",
+      completedSteps: 0,
+      finalOutput: null,
+      tracePath: input.tracePath,
+    });
+    await input.traceWriter.write(terminal.event);
+    return terminal.result;
+  }
+
+  await input.traceWriter.write({
+    event: "coding_task_classified",
+    timestamp: now(),
+    classification,
+  });
+
+  const workflowResult = await runWorkflow({
+    definition: createCodingWorkflow({
+      taskType: classification.taskType,
+      executor: input.executor,
+    }),
+    initialState: {
+      request,
+      classification,
+      output: null,
+      evidence: [],
+    },
+    maxSteps: input.maxSteps,
+    traceWriter: input.traceWriter,
+    now,
+  });
+  const terminal = createTerminal({
+    timestamp: now(),
+    status: workflowResult.status,
+    taskType: classification.taskType,
+    stopReason: mapStopReason(workflowResult.stopReason),
+    completedSteps: workflowResult.completedSteps,
+    finalOutput: workflowResult.state.output,
+    tracePath: input.tracePath,
+  });
+
+  await input.traceWriter.write(terminal.event);
+  return terminal.result;
+}
