@@ -3,10 +3,10 @@ import { test } from "node:test";
 
 import { parseCliInvocation } from "../../src/cli.js";
 
-test("parses coding mode with natural-language input", () => {
+test("treats coding as ordinary loop input", () => {
   assert.deepEqual(
     parseCliInvocation(["coding", "帮我查看", "loop 模块代码"]),
-    { mode: "coding", request: "帮我查看 loop 模块代码" },
+    { mode: "loop", request: "coding 帮我查看 loop 模块代码" },
   );
 });
 
@@ -17,9 +17,9 @@ test("keeps the existing default loop invocation", () => {
   );
 });
 
-test("rejects coding mode without a request", () => {
+test("rejects loop mode without a request", () => {
   assert.throws(
-    () => parseCliInvocation(["coding"]),
-    /Usage: npm run loop -- coding "your request"/,
+    () => parseCliInvocation([]),
+    /Usage: npm run loop -- "your task"/,
   );
 });

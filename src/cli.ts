@@ -14,27 +14,15 @@ import { loadLoopConfig } from "./config/load-config.js";
 import type { LoopState } from "./domain/loop-state.js";
 import { runLoop } from "./loop/loop-runner.js";
 import { runAct } from "./loop/stages/act.js";
-import { runConfiguredCodingMode } from "./modes/coding/run-configured-coding-mode.js";
 import { createRunTraceWriter } from "./trace/create-run-trace-writer.js";
 
-export type CliInvocation =
-  | { mode: "loop"; request: string }
-  | { mode: "coding"; request: string };
+export type CliInvocation = { mode: "loop"; request: string };
 
 /**
- * `coding` 是显式子命令；其余输入继续走原有 loop 模式，避免改变既有脚本调用。
- * 两条路径分别保留清晰的 usage，使缺少自然语言请求时在任何 runtime 创建前失败。
+ * loop 入口只解析普通任务。Coding mode 使用独立入口，避免同一个参数位置同时承担
+ * “模式选择”和自然语言内容两种职责；因此这里的 `coding` 也只是普通任务文本。
  */
 export function parseCliInvocation(args: string[]): CliInvocation {
-  if (args[0] === "coding") {
-    const request = args.slice(1).join(" ").trim();
-    if (!request) {
-      throw new Error('Usage: npm run loop -- coding "your request"');
-    }
-
-    return { mode: "coding", request };
-  }
-
   const request = args.join(" ").trim();
   if (!request) {
     throw new Error('Usage: npm run loop -- "your task"');
@@ -94,18 +82,6 @@ export async function runConfiguredLoop(
 
 async function main(): Promise<void> {
   const invocation = parseCliInvocation(process.argv.slice(2));
-
-  if (invocation.mode === "coding") {
-    const result = await runConfiguredCodingMode(invocation.request);
-    console.log(JSON.stringify(result, null, 2));
-
-    // blocked/cancelled 是可解释的 workflow 终态，不应被 CLI 伪装成 runtime crash。
-    if (result.status === "failed") {
-      process.exitCode = 1;
-    }
-    return;
-  }
-
   const state = await runConfiguredLoop(invocation.request);
   console.log(
     JSON.stringify(

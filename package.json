@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "coding": "tsx src/coding-cli.ts",
     "loop": "tsx src/cli.ts",
     "test": "tsx --test tests/unit/*.test.ts",
     "test:integration": "tsx --test tests/integration/*.test.ts"

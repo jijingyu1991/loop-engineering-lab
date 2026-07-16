@@ -155,14 +155,13 @@ CLI 最终会输出：
 
 ## Coding mode
 
-在普通 Loop 任务前加入 `coding` 子命令，就会进入面向代码库阅读与诊断的
-workflow：
+使用独立的 `coding` 命令进入面向代码库阅读与诊断的 workflow：
 
 ```bash
-npm run loop -- coding "帮我查看 loop 模块代码"
-npm run loop -- coding "帮我查找 trace 相关文件"
-npm run loop -- coding "帮我诊断 npm test 的失败"
-npm run loop -- coding "帮我实现一个 login 页面"
+npm run coding -- "帮我查看 loop 模块代码"
+npm run coding -- "帮我查找 trace 相关文件"
+npm run coding -- "帮我诊断 npm test 的失败"
+npm run coding -- "帮我实现一个 login 页面"
 ```
 
 Coding mode 会先把自然语言请求分类为三个核心任务类型：
