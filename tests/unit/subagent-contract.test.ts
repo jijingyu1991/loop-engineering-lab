@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   subagentContractSchema,
   subagentResultSchema,
+  validateSubagentResult,
   type SubagentContract,
   type SubagentResult,
 } from "../../src/domain/subagent-contract.js";
@@ -110,4 +111,76 @@ test("rejects free text, control decisions, and non-JSON extensions", () => {
     ...validResult,
     extensions: { callback: () => "not serializable" },
   }).success, false);
+});
+
+test("validates a completed result against its contract", () => {
+  assert.deepEqual(validateSubagentResult(validContract, validResult), validResult);
+});
+
+test("rejects mismatched contract identity and role", () => {
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    contractId: "another-contract",
+  }));
+
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    role: "reviewer-agent",
+  }));
+});
+
+test("requires completed results to satisfy evidence requirements", () => {
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    evidence: validResult.evidence.slice(0, 1),
+  }));
+
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    evidence: [
+      validResult.evidence[0],
+      { kind: "search_query", source: "search", summary: "Repeated query." },
+    ],
+  }));
+});
+
+test("keeps completed and unsuccessful error states consistent", () => {
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    errors: [{ code: "unexpected", message: "Unexpected error", retryable: false }],
+  }));
+
+  for (const status of ["failed", "blocked", "timed_out"] as const) {
+    assert.throws(() => validateSubagentResult(validContract, {
+      ...validResult,
+      status,
+      errors: [],
+    }));
+  }
+});
+
+test("rejects evidence sourced outside contract scope", () => {
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    evidence: [
+      validResult.evidence[0],
+      {
+        kind: "search_match",
+        source: "src/agents/create-agent.ts",
+        summary: "This path is outside src/runtime.",
+      },
+    ],
+  }));
+
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    evidence: [
+      validResult.evidence[0],
+      {
+        kind: "search_match",
+        source: "src/runtime/generated/result.ts",
+        summary: "This path is explicitly excluded.",
+      },
+    ],
+  }));
 });

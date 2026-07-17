@@ -149,3 +149,109 @@ export type SubagentContextItem = z.infer<
 export type SubagentContract = z.infer<typeof subagentContractSchema>;
 export type SubagentResult = z.infer<typeof subagentResultSchema>;
 export type SubagentError = SubagentResult["errors"][number];
+
+function isSameOrChildPath(candidate: string, scopePath: string): boolean {
+  const normalizedScope = scopePath.endsWith("/")
+    ? scopePath.slice(0, -1)
+    : scopePath;
+  return candidate === normalizedScope || candidate.startsWith(`${normalizedScope}/`);
+}
+
+function isEvidenceSourceAllowed(
+  contract: SubagentContract,
+  source: string,
+): boolean {
+  const logicalSources = new Set([
+    contract.id,
+    ...contract.allowedTools,
+    ...contract.contextPackage.items.map((item) => item.id),
+  ]);
+  if (logicalSources.has(source)) {
+    return true;
+  }
+
+  if (!workspaceRelativePathSchema.safeParse(source).success) {
+    return false;
+  }
+
+  const included = contract.scope.include.some(
+    (scopePath) => isSameOrChildPath(source, scopePath),
+  );
+  const excluded = contract.scope.exclude.some(
+    (scopePath) => isSameOrChildPath(source, scopePath),
+  );
+  return included && !excluded;
+}
+
+const subagentExecutionSchema = z.object({
+  contract: subagentContractSchema,
+  result: subagentResultSchema,
+}).strict().superRefine(({ contract, result }, context) => {
+  if (result.contractId !== contract.id) {
+    context.addIssue({
+      code: "custom",
+      path: ["result", "contractId"],
+      message: "Result contractId does not match the contract",
+    });
+  }
+
+  if (result.role !== contract.role) {
+    context.addIssue({
+      code: "custom",
+      path: ["result", "role"],
+      message: "Result role does not match the contract",
+    });
+  }
+
+  result.evidence.forEach((evidence, index) => {
+    if (!isEvidenceSourceAllowed(contract, evidence.source)) {
+      context.addIssue({
+        code: "custom",
+        path: ["result", "evidence", index, "source"],
+        message: "Evidence source is outside the contract scope",
+      });
+    }
+  });
+
+  if (result.status === "completed") {
+    if (result.errors.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["result", "errors"],
+        message: "Completed results cannot contain errors",
+      });
+    }
+
+    if (result.evidence.length < contract.evidenceRequirements.minimumCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["result", "evidence"],
+        message: "Completed result does not meet minimum evidence count",
+      });
+    }
+
+    const evidenceKinds = new Set(result.evidence.map((item) => item.kind));
+    for (const requiredKind of contract.evidenceRequirements.requiredKinds) {
+      if (!evidenceKinds.has(requiredKind)) {
+        context.addIssue({
+          code: "custom",
+          path: ["result", "evidence"],
+          message: `Completed result is missing evidence kind: ${requiredKind}`,
+        });
+      }
+    }
+  } else if (result.errors.length === 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["result", "errors"],
+      message: "Unsuccessful results must contain a structured error",
+    });
+  }
+});
+
+export function validateSubagentResult(
+  contract: unknown,
+  result: unknown,
+): SubagentResult {
+  return subagentExecutionSchema.parse({ contract, result }).result;
+}
