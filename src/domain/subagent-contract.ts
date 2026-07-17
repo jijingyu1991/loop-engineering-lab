@@ -150,6 +150,10 @@ export type SubagentContract = z.infer<typeof subagentContractSchema>;
 export type SubagentResult = z.infer<typeof subagentResultSchema>;
 export type SubagentError = SubagentResult["errors"][number];
 
+// scope 的授权判断刻意采用 workspace 相对路径上的词法比较，不访问文件系统，
+// 因而不存在因文件尚未生成而无法校验的问题。只接受 scope 本身或以 "/" 为边界的
+// 子路径，避免把 src/runtime-other 这类公共前缀误判成 src/runtime 的后代；末尾斜杠
+// 的归一化则让调用方即使绕过上游路径 schema，也不会改变同一路径的比较语义。
 function isSameOrChildPath(candidate: string, scopePath: string): boolean {
   const normalizedScope = scopePath.endsWith("/")
     ? scopePath.slice(0, -1)
@@ -161,6 +165,9 @@ function isEvidenceSourceAllowed(
   contract: SubagentContract,
   source: string,
 ): boolean {
+  // evidence source 有两种不同语义：Contract、tool、context item 使用逻辑标识符，
+  // 文件证据才使用 workspace 路径。逻辑来源必须显式出现在 Contract 的能力或上下文中；
+  // 未命中逻辑白名单的值不能直接进入 scope 比较，必须先通过安全相对路径校验。
   const logicalSources = new Set([
     contract.id,
     ...contract.allowedTools,
@@ -174,6 +181,8 @@ function isEvidenceSourceAllowed(
     return false;
   }
 
+  // 路径授权先要求命中至少一个 include，再检查所有 exclude；exclude 最终优先，
+  // 因此宽范围 include 中的生成目录等敏感子树仍会被稳定拒绝。
   const included = contract.scope.include.some(
     (scopePath) => isSameOrChildPath(source, scopePath),
   );
@@ -183,6 +192,9 @@ function isEvidenceSourceAllowed(
   return included && !excluded;
 }
 
+// 单对象 schema 先保证 Contract 与 Result 各自结构有效，随后在同一个 superRefine 中
+// 检查二者之间的身份、角色、证据来源和状态不变量。这里不在首个失败处提前返回，
+// 而是持续 addIssue，让调用方一次拿到所有可定位的 Zod issue，并保持统一 ZodError 边界。
 const subagentExecutionSchema = z.object({
   contract: subagentContractSchema,
   result: subagentResultSchema,
@@ -213,6 +225,9 @@ const subagentExecutionSchema = z.object({
     }
   });
 
+  // completed 表示执行成功，因此必须同时满足无错误与完整证据；其余终态则必须提供
+  // 至少一个结构化错误说明失败原因。两条分支互斥，防止成功状态夹带错误，或失败状态
+  // 在没有可诊断信息的情况下越过 Contract/Result 边界。
   if (result.status === "completed") {
     if (result.errors.length > 0) {
       context.addIssue({
