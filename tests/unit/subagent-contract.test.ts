@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ZodError } from "zod";
 
 import {
   subagentContractSchema,
   subagentResultSchema,
   validateSubagentResult,
+  workspaceRelativePathSchema,
   type SubagentContract,
   type SubagentResult,
 } from "../../src/domain/subagent-contract.js";
@@ -84,7 +86,9 @@ const validResult: SubagentResult = {
 
 test("parses a bounded subagent contract and unified result", () => {
   assert.deepEqual(subagentContractSchema.parse(validContract), validContract);
-  assert.deepEqual(subagentResultSchema.parse(validResult), validResult);
+  const parsedResult = subagentResultSchema.parse(validResult);
+  assert.deepEqual(parsedResult, validResult);
+  assert.notEqual(parsedResult.extensions, validResult.extensions);
 });
 
 test("rejects invalid contract budgets, tools, context, and scope", () => {
@@ -114,6 +118,31 @@ test("rejects invalid contract budgets, tools, context, and scope", () => {
   }).success, false);
 });
 
+test("validates workspace-relative POSIX path boundaries", () => {
+  assert.equal(
+    workspaceRelativePathSchema.safeParse("src/runtime/nested/file.ts").success,
+    true,
+  );
+
+  const invalidPaths = [
+    ["absolute", "/src/runtime/file.ts"],
+    ["traversal", "src/runtime/../file.ts"],
+    ["dot segment", "src/./runtime/file.ts"],
+    ["repeated separator", "src//runtime/file.ts"],
+    ["backslash", "src\\runtime\\file.ts"],
+    ["trailing separator", "src/runtime/"],
+    ["NUL", "src/runtime\0/file.ts"],
+  ] as const;
+
+  for (const [boundary, path] of invalidPaths) {
+    assert.equal(
+      workspaceRelativePathSchema.safeParse(path).success,
+      false,
+      `${boundary} path should be rejected`,
+    );
+  }
+});
+
 test("rejects free text, control decisions, and non-JSON extensions", () => {
   assert.equal(subagentResultSchema.safeParse("Found two files").success, false);
 
@@ -126,6 +155,35 @@ test("rejects free text, control decisions, and non-JSON extensions", () => {
     ...validResult,
     extensions: { callback: () => "not serializable" },
   }).success, false);
+
+  assert.equal(subagentResultSchema.safeParse({
+    ...validResult,
+    extensions: { sparse: new Array(1) },
+  }).success, false);
+});
+
+test("rejects cyclic and excessively nested extensions as Zod errors", () => {
+  const cyclicExtensions: Record<string, unknown> = {};
+  cyclicExtensions.self = cyclicExtensions;
+  const cyclicResult = { ...validResult, extensions: cyclicExtensions };
+
+  assert.equal(subagentResultSchema.safeParse(cyclicResult).success, false);
+  assert.throws(
+    () => validateSubagentResult(validContract, cyclicResult),
+    ZodError,
+  );
+
+  let excessivelyNested: Record<string, unknown> = {};
+  for (let depth = 0; depth < 101; depth += 1) {
+    excessivelyNested = { nested: excessivelyNested };
+  }
+
+  const nestedResult = { ...validResult, extensions: excessivelyNested };
+  assert.equal(subagentResultSchema.safeParse(nestedResult).success, false);
+  assert.throws(
+    () => validateSubagentResult(validContract, nestedResult),
+    ZodError,
+  );
 });
 
 test("validates a completed result against its contract", () => {
@@ -195,6 +253,18 @@ test("rejects evidence sourced outside contract scope", () => {
         kind: "search_match",
         source: "src/runtime/generated/result.ts",
         summary: "This path is explicitly excluded.",
+      },
+    ],
+  }));
+
+  assert.throws(() => validateSubagentResult(validContract, {
+    ...validResult,
+    evidence: [
+      validResult.evidence[0],
+      {
+        kind: "search_match",
+        source: "src/runtime-old/file.ts",
+        summary: "A shared string prefix is not an include-path match.",
       },
     ],
   }));

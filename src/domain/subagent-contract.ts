@@ -18,8 +18,124 @@ export type JsonValue =
 
 export type JsonObject = { [key: string]: JsonValue };
 
-// extensions 会跨越 Agent/trace 边界，因此这里递归限制为真正可序列化的 JSON 值。
-// finite() 进一步排除 JSON 无法保真表示的 Infinity 与 NaN。
+const MAX_JSON_NESTING_DEPTH = 100;
+
+interface JsonValidationFrame {
+  value: unknown;
+  path: (string | number)[];
+  depth: number;
+  leaving?: boolean;
+}
+
+function isRecordLike(value: object): value is Record<string, unknown> {
+  if (Array.isArray(value)) {
+    return false;
+  }
+
+  // 与 Zod record 的 plain-object 边界保持一致：接受普通对象和 null prototype
+  // 字典，拒绝 Date、Map 和 class instance 等带有非 JSON 运行时语义的实例。
+  const constructor = (value as { constructor?: unknown }).constructor;
+  if (constructor === undefined || typeof constructor !== "function") {
+    return true;
+  }
+
+  const prototype = constructor.prototype;
+  return typeof prototype === "object"
+    && prototype !== null
+    && Object.prototype.hasOwnProperty.call(prototype, "isPrototypeOf");
+}
+
+function addJsonCompatibilityIssues(
+  value: unknown,
+  context: z.RefinementCtx,
+): void {
+  const rootIsObject = typeof value === "object"
+    && value !== null
+    && isRecordLike(value);
+  if (!rootIsObject) {
+    context.addIssue({
+      code: "custom",
+      message: "Expected a JSON object",
+    });
+    return;
+  }
+
+  // 不使用 z.lazy 递归解析未知输入：调用方可能传入带环对象或恶意超深对象，前者会
+  // 永不终止，后者会耗尽 JavaScript 调用栈。显式栈把运行时栈消耗变为常量；depth
+  // 在入栈时受限，确保即使输入无环也有确定的安全边界。
+  const frames: JsonValidationFrame[] = [{ value, path: [], depth: 0 }];
+  const activeContainers = new WeakSet<object>();
+
+  while (frames.length > 0) {
+    const frame = frames.pop();
+    if (frame === undefined) {
+      break;
+    }
+
+    if (frame.leaving) {
+      activeContainers.delete(frame.value as object);
+      continue;
+    }
+
+    const current = frame.value;
+    if (
+      current === null
+      || typeof current === "string"
+      || typeof current === "boolean"
+      || (typeof current === "number" && Number.isFinite(current))
+    ) {
+      continue;
+    }
+
+    const isContainer = Array.isArray(current)
+      || (typeof current === "object" && current !== null && isRecordLike(current));
+    if (!isContainer) {
+      context.addIssue({
+        code: "custom",
+        path: frame.path,
+        message: "Value must be JSON-compatible",
+      });
+      continue;
+    }
+
+    if (frame.depth > MAX_JSON_NESTING_DEPTH) {
+      context.addIssue({
+        code: "custom",
+        path: frame.path,
+        message: `JSON value exceeds maximum nesting depth of ${MAX_JSON_NESTING_DEPTH}`,
+      });
+      continue;
+    }
+
+    // WeakSet 只记录当前 DFS 祖先链，而不是所有见过的对象。这样真正的回边会被拒绝，
+    // 但两个字段引用同一个无环对象仍可按 JSON 的值语义序列化，不会被误判为 cycle。
+    if (activeContainers.has(current)) {
+      context.addIssue({
+        code: "custom",
+        path: frame.path,
+        message: "Cyclic JSON values are not supported",
+      });
+      continue;
+    }
+
+    activeContainers.add(current);
+    frames.push({ ...frame, leaving: true });
+
+    const entries = Array.isArray(current)
+      ? Array.from(current.entries())
+      : Object.entries(current);
+    for (const [key, child] of entries.reverse()) {
+      frames.push({
+        value: child,
+        path: [...frame.path, key],
+        depth: frame.depth + 1,
+      });
+    }
+  }
+}
+
+// 前置 guard 已经保证递归解析不会遇到环或超深输入；保留原 Zod 递归 schema 作为第二阶段，
+// 让合法数据继续获得 record/array 的深拷贝，并由 finite() 维持精确的 JSON number 边界。
 const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.string(),
   z.number().finite(),
@@ -28,16 +144,26 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.array(jsonValueSchema),
   z.record(z.string(), jsonValueSchema),
 ]));
-
-export const jsonObjectSchema: z.ZodType<JsonObject> = z.record(
+const parsedJsonObjectSchema: z.ZodType<JsonObject> = z.record(
   z.string(),
   jsonValueSchema,
 );
 
+// extensions 会跨越 Agent/trace 边界，因此必须是可序列化的 JSON object；迭代式
+// superRefine 先把环和超深输入转换为普通 Zod issue，再交给原 schema 精确解析。
+export const jsonObjectSchema: z.ZodType<JsonObject> = z.unknown()
+  .superRefine(addJsonCompatibilityIssues)
+  .pipe(parsedJsonObjectSchema);
+
 // Contract 中的路径只能描述 workspace 内部资源。拒绝绝对路径、Windows 分隔符、
 // 空路径段以及 . / ..，避免调用方借由 scope 表达越界访问。
 function isWorkspaceRelativePath(value: string): boolean {
-  if (value.startsWith("/") || value.includes("\\") || value.includes("//")) {
+  if (
+    value.startsWith("/")
+    || value.includes("\\")
+    || value.includes("//")
+    || value.includes("\0")
+  ) {
     return false;
   }
 
