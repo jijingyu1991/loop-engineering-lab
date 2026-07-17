@@ -8,6 +8,21 @@ import {
   type SubagentContract,
   type SubagentResult,
 } from "../../src/domain/subagent-contract.js";
+import {
+  searchAgentContract,
+  searchAgentExtensionsSchema,
+  searchAgentResult,
+} from "../../src/subagents/examples/search-agent-example.js";
+import {
+  testAgentContract,
+  testAgentExtensionsSchema,
+  testAgentResult,
+} from "../../src/subagents/examples/test-agent-example.js";
+import {
+  reviewerAgentContract,
+  reviewerAgentExtensionsSchema,
+  reviewerAgentResult,
+} from "../../src/subagents/examples/reviewer-agent-example.js";
 
 const validContract: SubagentContract = {
   id: "search-related-files",
@@ -183,4 +198,34 @@ test("rejects evidence sourced outside contract scope", () => {
       },
     ],
   }));
+});
+
+test("exports three main-loop-consumable subagent examples", () => {
+  assert.deepEqual(
+    validateSubagentResult(searchAgentContract, searchAgentResult),
+    searchAgentResult,
+  );
+  assert.deepEqual(
+    validateSubagentResult(testAgentContract, testAgentResult),
+    testAgentResult,
+  );
+  assert.deepEqual(
+    validateSubagentResult(reviewerAgentContract, reviewerAgentResult),
+    reviewerAgentResult,
+  );
+});
+
+test("validates each example's role-specific extensions", () => {
+  assert.deepEqual(
+    searchAgentExtensionsSchema.parse(searchAgentResult.extensions),
+    searchAgentResult.extensions,
+  );
+  assert.deepEqual(
+    testAgentExtensionsSchema.parse(testAgentResult.extensions),
+    testAgentResult.extensions,
+  );
+  assert.deepEqual(
+    reviewerAgentExtensionsSchema.parse(reviewerAgentResult.extensions),
+    reviewerAgentResult.extensions,
+  );
 });
