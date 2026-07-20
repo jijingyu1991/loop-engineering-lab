@@ -283,6 +283,15 @@ test("exports three main-loop-consumable subagent examples", () => {
     validateSubagentResult(reviewerAgentContract, reviewerAgentResult),
     reviewerAgentResult,
   );
+
+  // reviewer 的事实来源被限制为冻结 trace 与 executor summary，且没有任何工具能力。
+  // 这条 fixture 断言防止示例未来重新引入读取仓库、搜索或执行工具的越权行为。
+  assert.deepEqual(reviewerAgentContract.allowedTools, []);
+  assert.deepEqual(reviewerAgentContract.scope.include, ["traces"]);
+  assert.deepEqual(
+    reviewerAgentContract.contextPackage.items.map((item) => item.id),
+    ["coding-trace", "executor-summary"],
+  );
 });
 
 test("validates each example's role-specific extensions", () => {

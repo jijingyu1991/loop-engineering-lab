@@ -1,68 +1,90 @@
-import { z } from "zod";
-
 import {
-  workspaceRelativePathSchema,
   type SubagentContract,
   type SubagentResult,
 } from "../../domain/subagent-contract.js";
+import { reviewerAgentExtensionsSchema } from "../reviewer/reviewer-contract.js";
 
-export const reviewerAgentExtensionsSchema = z.object({
-  findings: z.array(z.object({
-    severity: z.enum(["low", "medium", "high"]),
-    file: workspaceRelativePathSchema,
-    line: z.number().int().positive(),
-    title: z.string().min(1),
-    rationale: z.string().min(1),
-  }).strict()),
-  reviewedFiles: z.array(workspaceRelativePathSchema).min(1),
-}).strict();
+// 示例继续从原模块导出 schema，避免已有消费者因协议实现移到 reviewer 目录而改变导入路径。
+export { reviewerAgentExtensionsSchema } from "../reviewer/reviewer-contract.js";
 
 export const reviewerAgentContract = {
-  id: "review-workflow-runner",
+  id: "review-coding-attempt-1",
   role: "reviewer-agent",
-  task: "Review the supplied workflow runner diff for actionable defects.",
+  task: "Review the executor summary against the supplied trace.",
   scope: {
-    include: ["src/runtime", "tests/unit"],
+    include: ["traces"],
     exclude: [],
-    constraints: ["Report evidence-backed findings; do not edit files."],
+    constraints: ["Use only context items; do not execute tools or modify files."],
   },
-  allowedTools: ["read", "search", "diff"],
+  allowedTools: [],
   contextPackage: {
-    items: [{
-      id: "review-diff",
-      kind: "git-diff",
-      source: "git",
-      content: "Review the current diff affecting src/runtime/run-workflow.ts.",
-    }],
-    maxChars: 100,
+    items: [
+      {
+        id: "coding-trace",
+        kind: "trace",
+        source: "runtime",
+        content: "[{\"event\":\"coding_run_started\",\"timestamp\":\"2026-07-20T00:00:00.000Z\"}]",
+      },
+      {
+        id: "executor-summary",
+        kind: "summary",
+        source: "executor",
+        content: "Executor completed the requested coding task.",
+      },
+    ],
+    maxChars: 100_000,
   },
   expectedOutput: {
     format: "subagent-result",
-    requirements: ["Return located findings or an explicit empty findings list."],
+    requirements: ["Return pass, revise, or ask_user with three trace-backed checks."],
   },
   evidenceRequirements: {
-    requiredKinds: ["review_scope"],
-    minimumCount: 1,
+    requiredKinds: ["review_decision", "trace_reference"],
+    minimumCount: 2,
   },
   limits: { timeoutMs: 15_000, maxSteps: 8 },
 } satisfies SubagentContract;
 
 export const reviewerAgentResult = {
-  contractId: "review-workflow-runner",
+  contractId: "review-coding-attempt-1",
   role: "reviewer-agent",
   status: "completed",
-  summary: "Reviewed the scoped files and found no actionable defects.",
-  evidence: [{
-    kind: "review_scope",
-    source: "review-diff",
-    summary: "Reviewed run-workflow implementation and its unit tests.",
-  }],
+  summary: "The executor summary passes review.",
+  evidence: [
+    {
+      kind: "review_decision",
+      source: "review-coding-attempt-1",
+      summary: "pass",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "All checks reference trace index 0.",
+    },
+  ],
   errors: [],
   extensions: {
-    findings: [],
-    reviewedFiles: [
-      "src/runtime/run-workflow.ts",
-      "tests/unit/workflow-runner.test.ts",
+    decision: "pass",
+    checks: [
+      {
+        criterion: "conclusion_evidence",
+        status: "passed",
+        summary: "Claims cite trace.",
+        traceReferences: [0],
+      },
+      {
+        criterion: "failure_disclosure",
+        status: "passed",
+        summary: "No failure was omitted.",
+        traceReferences: [0],
+      },
+      {
+        criterion: "required_validation",
+        status: "passed",
+        summary: "Required validation is present.",
+        traceReferences: [0],
+      },
     ],
+    revisionInstructions: [],
   },
 } satisfies SubagentResult;
