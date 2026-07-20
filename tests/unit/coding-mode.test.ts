@@ -95,6 +95,24 @@ function createAskUserReview(traceLength: number): ReviewerAgentCompletedResult 
   return createReviewResult({ traceLength, decision: "ask_user" });
 }
 
+function withDistinctReviewEvidence(
+  review: ReviewerAgentCompletedResult,
+  source: string,
+  summary: string,
+): ReviewerAgentCompletedResult {
+  return {
+    ...review,
+    evidence: [
+      { kind: "review_decision", source, summary },
+      {
+        kind: "trace_reference",
+        source: "coding-trace",
+        summary: `${summary} trace reference`,
+      },
+    ],
+  };
+}
+
 function assertExecutionPrecedesReview(
   trace: readonly TraceEvent[],
   review: ReviewerAgentCompletedResult,
@@ -113,6 +131,13 @@ function assertExecutionPrecedesReview(
 const reviewerMustNotRun = async (): Promise<never> => {
   throw new Error("reviewer must not run");
 };
+
+function isReviewStepCompleted(
+  event: TraceEvent,
+): event is Extract<TraceEvent, { event: "workflow_step_completed" }> {
+  return event.event === "workflow_step_completed"
+    && event.step === "inspect_and_explain";
+}
 
 const cases = [
   ["explain_module", "explanation_completed"],
@@ -470,7 +495,42 @@ test("forces failed status when an unknown workflow reason maps to runtime_error
 test("revises once and passes reviewer feedback to the executor", async () => {
   const traceWriter = new MemoryTraceWriter();
   const feedbacks: string[][] = [];
+  const reviewerAttempts: number[] = [];
   let reviews = 0;
+  const rejectedExecutorEvidence = {
+    kind: "executor_attempt",
+    source: "first-executor",
+    summary: "rejected executor evidence",
+  };
+  const acceptedExecutorEvidence = {
+    kind: "executor_attempt",
+    source: "second-executor",
+    summary: "accepted executor evidence",
+  };
+  const reviseReviewerEvidence = [
+    {
+      kind: "review_decision",
+      source: "first-reviewer",
+      summary: "revise reviewer evidence",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "revise reviewer evidence trace reference",
+    },
+  ];
+  const passReviewerEvidence = [
+    {
+      kind: "review_decision",
+      source: "second-reviewer",
+      summary: "pass reviewer evidence",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "pass reviewer evidence trace reference",
+    },
+  ];
 
   const result = await runCodingMode({
     request: "Explain the workflow",
@@ -489,18 +549,25 @@ test("revises once and passes reviewer feedback to the executor", async () => {
       return {
         type: "completed",
         output: attempt === 1 ? "First summary" : "Revised summary",
-        evidence: [{
-          kind: "file",
-          source: "src/runtime/run-workflow.ts",
-          summary: `attempt ${attempt}`,
-        }],
+        evidence: [attempt === 1
+          ? rejectedExecutorEvidence
+          : acceptedExecutorEvidence],
       };
     },
-    reviewer: async ({ trace, summary }) => {
+    reviewer: async ({ attempt, trace, summary }) => {
       reviews += 1;
+      reviewerAttempts.push(attempt);
       const review = reviews === 1
-        ? createReviseReview(trace.length)
-        : createPassReview(trace.length);
+        ? withDistinctReviewEvidence(
+          createReviseReview(trace.length),
+          "first-reviewer",
+          "revise reviewer evidence",
+        )
+        : withDistinctReviewEvidence(
+          createPassReview(trace.length),
+          "second-reviewer",
+          "pass reviewer evidence",
+        );
       assertExecutionPrecedesReview(trace, review);
       assert.equal(summary, reviews === 1 ? "First summary" : "Revised summary");
       return review;
@@ -510,6 +577,7 @@ test("revises once and passes reviewer feedback to the executor", async () => {
 
   assert.equal(feedbacks.length, 2);
   assert.equal(reviews, 2);
+  assert.deepEqual(reviewerAttempts, [1, 2]);
   assert.deepEqual(feedbacks, [
     [],
     ["Add the missing trace-backed explanation."],
@@ -518,10 +586,40 @@ test("revises once and passes reviewer feedback to the executor", async () => {
   assert.equal(result.stopReason, "explanation_completed");
   assert.equal(result.completedSteps, 3);
   assert.equal(result.finalOutput, "Revised summary");
+
+  const executionEvents = traceWriter.events.filter(
+    (event) => event.event === "coding_execution_completed",
+  );
+  assert.deepEqual(executionEvents.map((event) => event.attempt), [1, 2]);
+
+  const reviewStepEvents = traceWriter.events.filter(isReviewStepCompleted);
+  assert.equal(reviewStepEvents.length, 2);
+  assert.deepEqual(reviewStepEvents[0]?.evidence, reviseReviewerEvidence);
+  assert.deepEqual(reviewStepEvents[1]?.evidence, [
+    acceptedExecutorEvidence,
+    ...passReviewerEvidence,
+  ]);
 });
 
 test("maps ask_user to blocked user_action_required", async () => {
   const traceWriter = new MemoryTraceWriter();
+  const rejectedExecutorEvidence = {
+    kind: "executor_attempt",
+    source: "ask-user-executor",
+    summary: "ask_user rejected executor evidence",
+  };
+  const askUserReviewerEvidence = [
+    {
+      kind: "review_decision",
+      source: "ask-user-reviewer",
+      summary: "ask_user reviewer evidence",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "ask_user reviewer evidence trace reference",
+    },
+  ];
 
   const result = await runCodingMode({
     request: "Diagnose the protected fixture",
@@ -537,10 +635,14 @@ test("maps ask_user to blocked user_action_required", async () => {
     executor: async () => ({
       type: "completed",
       output: "Unreviewed diagnosis",
-      evidence: [],
+      evidence: [rejectedExecutorEvidence],
     }),
     reviewer: async ({ trace }) => {
-      const review = createAskUserReview(trace.length);
+      const review = withDistinctReviewEvidence(
+        createAskUserReview(trace.length),
+        "ask-user-reviewer",
+        "ask_user reviewer evidence",
+      );
       assertExecutionPrecedesReview(trace, review);
       return review;
     },
@@ -550,6 +652,9 @@ test("maps ask_user to blocked user_action_required", async () => {
   assert.equal(result.status, "blocked");
   assert.equal(result.stopReason, "user_action_required");
   assert.equal(result.finalOutput, "May I inspect the protected fixture?");
+  const reviewStepEvent = traceWriter.events.find(isReviewStepCompleted);
+  assert.ok(reviewStepEvent);
+  assert.deepEqual(reviewStepEvent.evidence, askUserReviewerEvidence);
 });
 
 test("does not invoke reviewer when executor stops", async () => {
