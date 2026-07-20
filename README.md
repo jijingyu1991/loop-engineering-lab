@@ -180,6 +180,20 @@ Coding mode 目前只向 Agent 暴露文件读取、workspace 搜索和经过权
 文件及 `dist/` 等生成物；因此这里的边界是 Coding mode 不会有意编辑源文件，而不是保证
 执行前后 workspace 的每个文件都保持不变。
 
+### Reviewer subagent
+
+每次 Coding executor 产出 summary 后，都会由独立 reviewer-agent 读取本次已持久化的
+trace 快照和 summary。reviewer 检查结论 evidence、遗漏的失败信息和必要验证，输出
+`pass`、`revise` 或 `ask_user`。它没有任何工具，不能读取 workspace、执行命令或补做验证。
+
+- `pass`：coordinator 接受当前输出并按原任务成功原因结束；
+- `revise`：修改意见返回同一个 executor，并继续受 `maxSteps` 限制；
+- `ask_user`：以 `blocked + user_action_required` 返回具体问题。
+
+reviewer runtime 失败或超时分别使用 `reviewer_failed` 和 `reviewer_timed_out`，不会把未经
+复审的 executor summary 报告为成功。`subagent_started`、`subagent_finished` 和
+`coding_execution_completed` 事件保存复审输入边界、结果及 trace 引用。
+
 命令结束时会输出结构化结果，字段含义如下：
 
 - `status`：运行终态，例如 `completed`、`failed` 或 `blocked`；
