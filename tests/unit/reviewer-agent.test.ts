@@ -1,0 +1,124 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { MaxTurnsExceededError, type Runner } from "@openai/agents";
+
+import type { ModelConfig } from "../../src/config/config-schema.js";
+import {
+  SubagentMaxStepsExceededError,
+} from "../../src/subagents/subagent-invoker.js";
+import {
+  createReviewerAgent,
+  type ReviewerAgent,
+} from "../../src/subagents/reviewer/create-reviewer-agent.js";
+import { runReviewerAgent } from "../../src/subagents/reviewer/run-reviewer-agent.js";
+
+const modelConfig: ModelConfig = {
+  model: "gpt-5.4-mini",
+  baseURL: "https://api.openai.com/v1",
+  apiKeyEnv: "OPENAI_API_KEY",
+  api: "responses",
+};
+
+const validResult = {
+  contractId: "review-coding-attempt-1",
+  role: "reviewer-agent",
+  status: "completed",
+  summary: "The summary is supported by the supplied trace.",
+  evidence: [],
+  errors: [],
+};
+
+test("creates a structured reviewer with no tools", () => {
+  const agent = createReviewerAgent(modelConfig);
+
+  assert.deepEqual(agent.tools, []);
+  assert.match(String(agent.instructions), /conclusion.*evidence/i);
+  assert.match(String(agent.instructions), /failure/i);
+  assert.match(String(agent.instructions), /required validation/i);
+  assert.match(String(agent.instructions), /must not.*tool/i);
+});
+
+test("passes maxSteps and signal to Runner", async () => {
+  const controller = new AbortController();
+  let options: unknown;
+  const runner = {
+    run: async (_agent: unknown, _prompt: unknown, received: unknown) => {
+      options = received;
+      return { finalOutput: validResult, interruptions: [] };
+    },
+  } as unknown as Runner;
+
+  assert.deepEqual(await runReviewerAgent({
+    runner,
+    agent: {} as ReviewerAgent,
+    prompt: "review",
+    allowedTools: [],
+    maxSteps: 4,
+    signal: controller.signal,
+  }), validResult);
+  assert.deepEqual(options, { maxTurns: 4, signal: controller.signal });
+});
+
+test("rejects a reviewer invocation with permitted tools", async () => {
+  const runner = {
+    run: async () => assert.fail("runner must not be called"),
+  } as unknown as Runner;
+
+  await assert.rejects(runReviewerAgent({
+    runner,
+    agent: {} as ReviewerAgent,
+    prompt: "review",
+    allowedTools: ["read"],
+    maxSteps: 4,
+    signal: new AbortController().signal,
+  }), /Reviewer contract must not allow tools/);
+});
+
+test("rejects a reviewer interruption", async () => {
+  const runner = {
+    run: async () => ({
+      finalOutput: validResult,
+      interruptions: [{}],
+    }),
+  } as unknown as Runner;
+
+  await assert.rejects(runReviewerAgent({
+    runner,
+    agent: {} as ReviewerAgent,
+    prompt: "review",
+    allowedTools: [],
+    maxSteps: 4,
+    signal: new AbortController().signal,
+  }), /Tool-free reviewer returned an interruption/);
+});
+
+test("rejects a reviewer response without structured output", async () => {
+  const runner = {
+    run: async () => ({ finalOutput: undefined, interruptions: [] }),
+  } as unknown as Runner;
+
+  await assert.rejects(runReviewerAgent({
+    runner,
+    agent: {} as ReviewerAgent,
+    prompt: "review",
+    allowedTools: [],
+    maxSteps: 4,
+    signal: new AbortController().signal,
+  }), /Reviewer returned no structured output/);
+});
+
+test("maps SDK max turns exhaustion to the provider-neutral error", async () => {
+  const runner = {
+    run: async () => { throw new MaxTurnsExceededError("max turns reached"); },
+  } as unknown as Runner;
+
+  await assert.rejects(runReviewerAgent({
+    runner,
+    agent: {} as ReviewerAgent,
+    prompt: "review",
+    allowedTools: [],
+    maxSteps: 4,
+    signal: new AbortController().signal,
+  }), SubagentMaxStepsExceededError);
+});
