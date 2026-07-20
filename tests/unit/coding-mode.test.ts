@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { ToolCallError, type Runner } from "@openai/agents";
+
 import { runWorkflow } from "../../src/runtime/run-workflow.js";
 import { createCodingWorkflow } from "../../src/modes/coding/create-coding-workflow.js";
+import type { CodingAgent } from "../../src/modes/coding/create-coding-agent.js";
+import { runCodingAgent } from "../../src/modes/coding/run-coding-agent.js";
 import { runCodingMode } from "../../src/modes/coding/run-coding-mode.js";
 import type { CodingExecutor } from "../../src/modes/coding/coding-state.js";
 import type { CodingTaskType } from "../../src/modes/coding/coding-task.js";
@@ -15,6 +19,7 @@ import { runSubagent } from "../../src/subagents/run-subagent.js";
 import { RecordingTraceWriter } from "../../src/trace/recording-trace-writer.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../../src/trace/trace-infrastructure-error.js";
 
 class MemoryTraceWriter implements TraceWriter {
   public readonly events: TraceEvent[] = [];
@@ -519,6 +524,46 @@ test("rejects composed coding runs when an internal trace write fails", async (t
       );
     });
   }
+});
+
+test("propagates a trace failure wrapped by the coding Agent Runner", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const traceError = new TraceInfrastructureError(new Error("tool trace unavailable"));
+  const runner = {
+    run: async () => {
+      throw new ToolCallError("function tool failed", traceError);
+    },
+  } as unknown as Runner;
+
+  await assert.rejects(runCodingMode({
+    request: "Explain the workflow",
+    activeModel: "test-model",
+    tracePath: "traces/wrapped-tool-trace-failure.jsonl",
+    maxSteps: 3,
+    traceWriter,
+    classifier: async () => ({
+      taskType: "explain_module",
+      objective: "Explain the workflow",
+      reason: "Explanation requested",
+    }),
+    executor: () => runCodingAgent({
+      runner,
+      agent: {} as CodingAgent,
+      prompt: "explain",
+      maxTurns: 3,
+      traceWriter,
+    }),
+    reviewer: reviewerMustNotRun,
+    traceSnapshot: () => traceWriter.snapshot(),
+  }), (error: unknown) => {
+    assert.equal(error, traceError);
+    return true;
+  });
+
+  assert.equal(
+    traceWriter.events.some((event) => event.event === "workflow_step_failed"),
+    false,
+  );
 });
 
 test("rejects an empty request before writing the start trace", async () => {

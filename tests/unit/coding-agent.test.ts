@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { RunToolApprovalItem, Runner, Tool } from "@openai/agents";
+import {
+  ToolCallError,
+  type RunToolApprovalItem,
+  type Runner,
+  type Tool,
+} from "@openai/agents";
 
 import {
   classifyCodingRequest,
@@ -17,6 +22,7 @@ import { runCodingAgent } from "../../src/modes/coding/run-coding-agent.js";
 import type { ModelConfig } from "../../src/config/config-schema.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../../src/trace/trace-infrastructure-error.js";
 
 class MemoryTraceWriter implements TraceWriter {
   public readonly events: TraceEvent[] = [];
@@ -289,5 +295,45 @@ test("keeps a nonzero test exit as completed diagnostic evidence", async () => {
   }), {
     type: "completed",
     ...finalOutput,
+  });
+});
+
+test("unwraps a trace infrastructure failure from an SDK ToolCallError", async () => {
+  const traceError = new TraceInfrastructureError(new Error("trace unavailable"));
+  const wrapper = new ToolCallError("tool call failed", traceError);
+  const runner = {
+    run: async () => { throw wrapper; },
+  } as unknown as Runner;
+
+  await assert.rejects(runCodingAgent({
+    runner,
+    agent: {} as CodingAgent,
+    prompt: "diagnose",
+    maxTurns: 5,
+    traceWriter: new MemoryTraceWriter(),
+  }), (error: unknown) => {
+    assert.equal(error, traceError);
+    return true;
+  });
+});
+
+test("preserves ordinary SDK ToolCallError wrappers", async () => {
+  const wrapper = new ToolCallError(
+    "tool call failed",
+    new Error("ordinary tool failure"),
+  );
+  const runner = {
+    run: async () => { throw wrapper; },
+  } as unknown as Runner;
+
+  await assert.rejects(runCodingAgent({
+    runner,
+    agent: {} as CodingAgent,
+    prompt: "diagnose",
+    maxTurns: 5,
+    traceWriter: new MemoryTraceWriter(),
+  }), (error: unknown) => {
+    assert.equal(error, wrapper);
+    return true;
   });
 });

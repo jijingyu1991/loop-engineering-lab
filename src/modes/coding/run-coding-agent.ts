@@ -1,7 +1,12 @@
-import type { RunToolApprovalItem, Runner } from "@openai/agents";
+import {
+  ToolCallError,
+  type RunToolApprovalItem,
+  type Runner,
+} from "@openai/agents";
 
 import { sanitizeToolText } from "../../agents/tools/sanitize-tool-text.js";
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../../trace/trace-infrastructure-error.js";
 import type { CodingExecutorResult } from "./coding-state.js";
 import type { CodingAgent } from "./create-coding-agent.js";
 
@@ -48,6 +53,17 @@ export async function runCodingAgent(input: {
 }): Promise<CodingExecutorResult> {
   const result = await input.runner.run(input.agent, input.prompt, {
     maxTurns: input.maxTurns,
+  }).catch((error: unknown) => {
+    // Agents SDK 会把 function tool 的原始异常包进 ToolCallError.error。只在这个
+    // 精确组合下恢复同一个 trace 基础设施错误，让 provider-neutral workflow 能按
+    // 既有边界识别；其他 SDK/工具异常必须保留 wrapper、state 与诊断语义。
+    if (
+      error instanceof ToolCallError &&
+      error.error instanceof TraceInfrastructureError
+    ) {
+      throw error.error;
+    }
+    throw error;
   });
 
   // 中断比 finalOutput 缺失更具体；当前里程碑不保存或恢复 SDK RunState，
