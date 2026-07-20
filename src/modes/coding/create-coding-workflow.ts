@@ -2,8 +2,11 @@ import type {
   WorkflowDefinition,
   WorkflowEvidence,
 } from "../../runtime/workflow-types.js";
+import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
+import type { TraceEvent } from "../../trace/trace-event.js";
 import type {
   CodingExecutor,
+  CodingReviewer,
   CodingStopReason,
   CodingWorkflowState,
 } from "./coding-state.js";
@@ -52,8 +55,13 @@ const WORKFLOW_PROMPTS: Record<CodingTaskType, WorkflowPrompt> = {
 export function createCodingWorkflow(input: {
   taskType: CodingTaskType;
   executor: CodingExecutor;
+  reviewer: CodingReviewer;
+  traceWriter: TraceWriter;
+  traceSnapshot: () => readonly TraceEvent[];
+  now?: () => string;
 }): WorkflowDefinition<CodingWorkflowState> {
   const prompt = WORKFLOW_PROMPTS[input.taskType];
+  const now = input.now ?? (() => new Date().toISOString());
 
   return {
     initialStep: "understand_request",
@@ -97,6 +105,7 @@ export function createCodingWorkflow(input: {
             request: state.request,
             classification: state.classification,
             instructions: prompt.instructions,
+            revisionInstructions: state.revisionInstructions,
           });
 
           if (executorResult.type === "stopped") {
@@ -116,19 +125,101 @@ export function createCodingWorkflow(input: {
             ? `${executorResult.output}\n\nNo files were modified.`
             : executorResult.output;
 
+          const attempt = state.attempt + 1;
+          // reviewer 的判断必须能引用“当前摘要已经执行完成”的审计事实。先等待 trace
+          // 持久化，再获取调用方提供的副本，避免 reviewer 观察到写入前或持续变化的数组。
+          await input.traceWriter.write({
+            event: "coding_execution_completed",
+            timestamp: now(),
+            attempt,
+            summary: output,
+            evidence: executorResult.evidence,
+          });
+          const trace = input.traceSnapshot();
+          const reviewResult = await input.reviewer({
+            attempt,
+            trace,
+            summary: output,
+          });
+
+          if (reviewResult.status !== "completed") {
+            return {
+              state: {
+                ...state,
+                attempt,
+                output: null,
+                evidence: [...state.evidence, ...reviewResult.evidence],
+                revisionInstructions: [],
+              },
+              evidence: reviewResult.evidence,
+              transition: {
+                type: "stop" as const,
+                status: "failed" as const,
+                reason: reviewResult.status === "timed_out"
+                  ? "reviewer_timed_out"
+                  : "reviewer_failed",
+              },
+            };
+          }
+
+          // completed reviewer result 已在 reviewer adapter 边界按严格 schema 验证；
+          // workflow 只消费建议字段，自身负责把建议映射为受控 transition。
+          const extensions = reviewResult.extensions;
+          if (extensions.decision === "pass") {
+            return {
+              state: {
+                ...state,
+                attempt,
+                output,
+                evidence: [
+                  ...state.evidence,
+                  ...executorResult.evidence,
+                  ...reviewResult.evidence,
+                ],
+                revisionInstructions: [],
+              },
+              evidence: [...executorResult.evidence, ...reviewResult.evidence],
+              transition: {
+                type: "stop" as const,
+                status: "completed" as const,
+                reason: prompt.stopReason,
+              },
+            };
+          }
+
+          if (extensions.decision === "ask_user") {
+            return {
+              state: {
+                ...state,
+                attempt,
+                output: extensions.userQuestion ?? null,
+                evidence: [...state.evidence, ...reviewResult.evidence],
+                revisionInstructions: [],
+              },
+              evidence: reviewResult.evidence,
+              transition: {
+                type: "stop" as const,
+                status: "blocked" as const,
+                reason: "user_action_required",
+              },
+            };
+          }
+
           return {
             state: {
               ...state,
-              // disclosure 是 workflow 的运行时后置条件，不能只寄希望于模型遵循
-              // prompt。已有精确句子的输出保持逐字不变，缺失时才确定性补齐。
-              output,
-              evidence: [...state.evidence, ...executorResult.evidence],
+              attempt,
+              // revise 时不保存未通过审查的摘要及其 executor evidence；该次执行已经
+              // 写入 coding_execution_completed，可审计但不会被误当作成功终态输出。
+              output: null,
+              evidence: [...state.evidence, ...reviewResult.evidence],
+              revisionInstructions: extensions.revisionInstructions,
             },
-            evidence: executorResult.evidence,
+            evidence: reviewResult.evidence,
             transition: {
-              type: "stop" as const,
-              status: "completed" as const,
-              reason: prompt.stopReason,
+              type: "next" as const,
+              step: "inspect_and_explain",
+              reason: "review_revision_required",
             },
           };
         },

@@ -1,10 +1,14 @@
 import { runWorkflow } from "../../runtime/run-workflow.js";
 import type { WorkflowStatus } from "../../runtime/workflow-types.js";
-import type { CodingRunStoppedEvent } from "../../trace/trace-event.js";
+import type {
+  CodingRunStoppedEvent,
+  TraceEvent,
+} from "../../trace/trace-event.js";
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
 import { createCodingWorkflow } from "./create-coding-workflow.js";
 import type {
   CodingExecutor,
+  CodingReviewer,
   CodingRunResult,
   CodingStopReason,
 } from "./coding-state.js";
@@ -25,6 +29,8 @@ const CODING_STOP_REASONS = new Set<CodingStopReason>([
   "user_action_required",
   "approval_required",
   "approval_rejected",
+  "reviewer_failed",
+  "reviewer_timed_out",
   "runtime_error",
 ]);
 
@@ -87,6 +93,8 @@ export async function runCodingMode(input: {
   traceWriter: TraceWriter;
   classifier: CodingClassifier;
   executor: CodingExecutor;
+  reviewer?: CodingReviewer;
+  traceSnapshot?: () => readonly TraceEvent[];
   now?: () => string;
 }): Promise<CodingRunResult> {
   const request = input.request.trim();
@@ -107,6 +115,23 @@ export async function runCodingMode(input: {
     mode: "coding",
     activeModel: input.activeModel,
   });
+
+  if (input.reviewer === undefined || input.traceSnapshot === undefined) {
+    // Task 5 到 Task 6 的组合过渡期允许旧 composition 暂未注入 reviewer，但只能
+    // fail-closed。这里在任何模型调用前终止，既不产生费用，也绝不让 executor 摘要
+    // 绕过语义审查成为成功输出；Task 6 会在进程边界提供真实依赖。
+    const terminal = createTerminal({
+      timestamp: now(),
+      status: "failed",
+      taskType: null,
+      stopReason: "reviewer_failed",
+      completedSteps: 0,
+      finalOutput: null,
+      tracePath: input.tracePath,
+    });
+    await input.traceWriter.write(terminal.event);
+    return terminal.result;
+  }
 
   let classification;
   try {
@@ -137,12 +162,18 @@ export async function runCodingMode(input: {
     definition: createCodingWorkflow({
       taskType: classification.taskType,
       executor: input.executor,
+      reviewer: input.reviewer,
+      traceWriter: input.traceWriter,
+      traceSnapshot: input.traceSnapshot,
+      now,
     }),
     initialState: {
       request,
       classification,
       output: null,
       evidence: [],
+      attempt: 0,
+      revisionInstructions: [],
     },
     maxSteps: input.maxSteps,
     traceWriter: input.traceWriter,
