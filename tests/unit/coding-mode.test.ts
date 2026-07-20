@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { runWorkflow } from "../../src/runtime/run-workflow.js";
+import { createCodingWorkflow } from "../../src/modes/coding/create-coding-workflow.js";
 import { runCodingMode } from "../../src/modes/coding/run-coding-mode.js";
 import type { CodingExecutor } from "../../src/modes/coding/coding-state.js";
 import type { CodingTaskType } from "../../src/modes/coding/coding-task.js";
@@ -655,6 +657,218 @@ test("maps ask_user to blocked user_action_required", async () => {
   const reviewStepEvent = traceWriter.events.find(isReviewStepCompleted);
   assert.ok(reviewStepEvent);
   assert.deepEqual(reviewStepEvent.evidence, askUserReviewerEvidence);
+});
+
+test("keeps only review-approved evidence in final state after revision", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const classification = {
+    taskType: "explain_module" as const,
+    objective: "Explain the workflow state",
+    reason: "Workflow-level evidence inspection requested",
+  };
+  const classificationEvidence = [
+    {
+      kind: "classification_objective",
+      source: "explain_module",
+      summary: classification.objective,
+    },
+    {
+      kind: "classification_reason",
+      source: "explain_module",
+      summary: classification.reason,
+    },
+  ];
+  const rejectedExecutorEvidence = {
+    kind: "executor_attempt",
+    source: "state-first-executor",
+    summary: "state rejected executor evidence",
+  };
+  const acceptedExecutorEvidence = {
+    kind: "executor_attempt",
+    source: "state-second-executor",
+    summary: "state accepted executor evidence",
+  };
+  const reviseReviewerEvidence = [
+    {
+      kind: "review_decision",
+      source: "state-first-reviewer",
+      summary: "state revise reviewer evidence",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "state revise reviewer evidence trace reference",
+    },
+  ];
+  const passReviewerEvidence = [
+    {
+      kind: "review_decision",
+      source: "state-second-reviewer",
+      summary: "state pass reviewer evidence",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "state pass reviewer evidence trace reference",
+    },
+  ];
+  let executorCalls = 0;
+  let reviewerCalls = 0;
+
+  const result = await runWorkflow({
+    definition: createCodingWorkflow({
+      taskType: classification.taskType,
+      executor: async () => {
+        executorCalls += 1;
+        return {
+          type: "completed",
+          output: executorCalls === 1 ? "Rejected summary" : "Accepted summary",
+          evidence: [executorCalls === 1
+            ? rejectedExecutorEvidence
+            : acceptedExecutorEvidence],
+        };
+      },
+      reviewer: async ({ trace }) => {
+        reviewerCalls += 1;
+        const review = reviewerCalls === 1
+          ? withDistinctReviewEvidence(
+            createReviseReview(trace.length),
+            "state-first-reviewer",
+            "state revise reviewer evidence",
+          )
+          : withDistinctReviewEvidence(
+            createPassReview(trace.length),
+            "state-second-reviewer",
+            "state pass reviewer evidence",
+          );
+        assertExecutionPrecedesReview(trace, review);
+        return review;
+      },
+      traceWriter,
+      traceSnapshot: () => traceWriter.snapshot(),
+    }),
+    initialState: {
+      request: "Explain workflow state",
+      classification,
+      output: null,
+      evidence: [],
+      attempt: 0,
+      revisionInstructions: [],
+    },
+    maxSteps: 3,
+    traceWriter,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.state.output, "Accepted summary");
+  assert.deepEqual(result.state.evidence, [
+    ...classificationEvidence,
+    ...reviseReviewerEvidence,
+    acceptedExecutorEvidence,
+    ...passReviewerEvidence,
+  ]);
+  assert.equal(
+    result.state.evidence.some(
+      (evidence) => evidence.source === rejectedExecutorEvidence.source,
+    ),
+    false,
+  );
+
+  // 累计 state 与每一步公开的 evidence 是两个合同；两者都必须保持拒绝/接受边界。
+  const reviewStepEvents = traceWriter.events.filter(isReviewStepCompleted);
+  assert.deepEqual(reviewStepEvents.map((event) => event.evidence), [
+    reviseReviewerEvidence,
+    [acceptedExecutorEvidence, ...passReviewerEvidence],
+  ]);
+});
+
+test("keeps only reviewer evidence in ask_user final state", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const classification = {
+    taskType: "diagnose_test_failure" as const,
+    objective: "Diagnose protected state",
+    reason: "User input is required",
+  };
+  const classificationEvidence = [
+    {
+      kind: "classification_objective",
+      source: "diagnose_test_failure",
+      summary: classification.objective,
+    },
+    {
+      kind: "classification_reason",
+      source: "diagnose_test_failure",
+      summary: classification.reason,
+    },
+  ];
+  const rejectedExecutorEvidence = {
+    kind: "executor_attempt",
+    source: "state-ask-user-executor",
+    summary: "state ask_user rejected executor evidence",
+  };
+  const askUserReviewerEvidence = [
+    {
+      kind: "review_decision",
+      source: "state-ask-user-reviewer",
+      summary: "state ask_user reviewer evidence",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "state ask_user reviewer evidence trace reference",
+    },
+  ];
+
+  const result = await runWorkflow({
+    definition: createCodingWorkflow({
+      taskType: classification.taskType,
+      executor: async () => ({
+        type: "completed",
+        output: "Rejected ask_user summary",
+        evidence: [rejectedExecutorEvidence],
+      }),
+      reviewer: async ({ trace }) => {
+        const review = withDistinctReviewEvidence(
+          createAskUserReview(trace.length),
+          "state-ask-user-reviewer",
+          "state ask_user reviewer evidence",
+        );
+        assertExecutionPrecedesReview(trace, review);
+        return review;
+      },
+      traceWriter,
+      traceSnapshot: () => traceWriter.snapshot(),
+    }),
+    initialState: {
+      request: "Diagnose protected state",
+      classification,
+      output: null,
+      evidence: [],
+      attempt: 0,
+      revisionInstructions: [],
+    },
+    maxSteps: 3,
+    traceWriter,
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.stopReason, "user_action_required");
+  assert.equal(result.state.output, "May I inspect the protected fixture?");
+  assert.deepEqual(result.state.evidence, [
+    ...classificationEvidence,
+    ...askUserReviewerEvidence,
+  ]);
+  assert.equal(
+    result.state.evidence.some(
+      (evidence) => evidence.source === rejectedExecutorEvidence.source,
+    ),
+    false,
+  );
+
+  const reviewStepEvents = traceWriter.events.filter(isReviewStepCompleted);
+  assert.deepEqual(reviewStepEvents.map((event) => event.evidence), [
+    askUserReviewerEvidence,
+  ]);
 });
 
 test("does not invoke reviewer when executor stops", async () => {
