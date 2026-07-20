@@ -2,6 +2,11 @@ import type { LoopStage } from "../domain/loop-step.js";
 import type { LoopStatus } from "../domain/loop-state.js";
 import type { StepError } from "../domain/stage-result.js";
 import type {
+  AllowedSubagentTool,
+  SubagentResult,
+  SubagentRole,
+} from "../domain/subagent-contract.js";
+import type {
   ToolError,
   ToolEvidence,
 } from "../agents/tools/tool-result.js";
@@ -136,6 +141,30 @@ export interface CodingTaskClassifiedEvent {
   classification: CodingTaskClassification;
 }
 
+export interface CodingExecutionCompletedEvent {
+  event: "coding_execution_completed";
+  timestamp: string;
+  attempt: number;
+  summary: string;
+  evidence: WorkflowEvidence[];
+}
+
+export interface SubagentStartedEvent {
+  event: "subagent_started";
+  timestamp: string;
+  contractId: string;
+  role: SubagentRole;
+  contextItemIds: string[];
+  allowedTools: AllowedSubagentTool[];
+  limits: { timeoutMs: number; maxSteps: number };
+}
+
+export interface SubagentFinishedEvent {
+  event: "subagent_finished";
+  timestamp: string;
+  result: SubagentResult;
+}
+
 export interface CodingRunStoppedEvent {
   event: "coding_run_stopped";
   timestamp: string;
@@ -160,4 +189,7 @@ export type TraceEvent =
   | WorkflowTransitionDecidedEvent
   | CodingRunStartedEvent
   | CodingTaskClassifiedEvent
+  | CodingExecutionCompletedEvent
+  | SubagentStartedEvent
+  | SubagentFinishedEvent
   | CodingRunStoppedEvent;
