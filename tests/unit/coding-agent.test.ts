@@ -12,6 +12,7 @@ import {
   createCodingAgent,
   type CodingAgent,
 } from "../../src/modes/coding/create-coding-agent.js";
+import { createCodingExecutorPrompt } from "../../src/modes/coding/run-configured-coding-mode.js";
 import { runCodingAgent } from "../../src/modes/coding/run-coding-agent.js";
 import type { ModelConfig } from "../../src/config/config-schema.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
@@ -139,6 +140,38 @@ test("requires implementation plans to disclose that no files changed", () => {
     String(agent.instructions),
     /implementation-planning responses.*No files were modified\./,
   );
+});
+
+test("adds reviewer revisions to a distinct prompt section without mutating them", () => {
+  const revisionInstructions = [
+    "Cite the failing test trace.",
+    "Disclose the skipped validation.",
+  ];
+  const firstAttemptPrompt = createCodingExecutorPrompt({
+    request: "  preserve this raw request  ",
+    objective: "Diagnose the failure",
+    classificationReason: "A test failed",
+    workflowInstructions: "Inspect local evidence.",
+    revisionInstructions: [],
+  });
+  const revisionPrompt = createCodingExecutorPrompt({
+    request: "  preserve this raw request  ",
+    objective: "Diagnose the failure",
+    classificationReason: "A test failed",
+    workflowInstructions: "Inspect local evidence.",
+    revisionInstructions,
+  });
+
+  assert.doesNotMatch(firstAttemptPrompt, /Reviewer revision instructions:/);
+  assert.match(revisionPrompt, /Raw request:\n  preserve this raw request  /);
+  assert.match(
+    revisionPrompt,
+    /\n\nReviewer revision instructions:\nCite the failing test trace\.\nDisclose the skipped validation\.$/,
+  );
+  assert.deepEqual(revisionInstructions, [
+    "Cite the failing test trace.",
+    "Disclose the skipped validation.",
+  ]);
 });
 
 test("turns a coding tool interruption into approval_required", async () => {
