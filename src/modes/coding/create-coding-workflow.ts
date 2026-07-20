@@ -4,6 +4,7 @@ import type {
 } from "../../runtime/workflow-types.js";
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
 import type { TraceEvent } from "../../trace/trace-event.js";
+import { TraceInfrastructureError } from "../../trace/trace-infrastructure-error.js";
 import type {
   CodingExecutor,
   CodingReviewer,
@@ -136,11 +137,35 @@ export function createCodingWorkflow(input: {
             evidence: executorResult.evidence,
           });
           const trace = input.traceSnapshot();
-          const reviewResult = await input.reviewer({
-            attempt,
-            trace,
-            summary: output,
-          });
+          let reviewResult: Awaited<ReturnType<CodingReviewer>>;
+          try {
+            reviewResult = await input.reviewer({
+              attempt,
+              trace,
+              summary: output,
+            });
+          } catch (error) {
+            // Contract/context 构造与 provider adapter 都属于 reviewer 边界。普通异常
+            // 统一映射为 reviewer_failed，避免通用 workflow 把角色失败误报成 step bug；
+            // trace 存储故障仍必须穿透到顶层，因为此时审计链本身已经不完整。
+            if (error instanceof TraceInfrastructureError) {
+              throw error;
+            }
+            return {
+              state: {
+                ...state,
+                attempt,
+                output: null,
+                revisionInstructions: [],
+              },
+              evidence: [],
+              transition: {
+                type: "stop" as const,
+                status: "failed" as const,
+                reason: "reviewer_failed" as const,
+              },
+            };
+          }
 
           if (reviewResult.status !== "completed") {
             return {

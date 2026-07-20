@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   createReviewerAgentContract,
+  reviewerAgentExtensionsSchema,
   validateReviewerAgentCompletedResult,
 } from "../../src/subagents/reviewer/reviewer-contract.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
@@ -38,6 +39,24 @@ const passExtensions = {
     },
   ],
   revisionInstructions: [],
+};
+
+const reviseExtensions = {
+  ...passExtensions,
+  decision: "revise" as const,
+  checks: passExtensions.checks.map((check, index) => (
+    index === 0 ? { ...check, status: "failed" as const } : check
+  )),
+  revisionInstructions: ["Add a trace-backed conclusion."],
+};
+
+const askUserExtensions = {
+  ...passExtensions,
+  decision: "ask_user" as const,
+  checks: passExtensions.checks.map((check, index) => (
+    index === 0 ? { ...check, status: "needs_user" as const } : check
+  )),
+  userQuestion: "Which expected behavior should be used?",
 };
 
 function createPassResult(contractId: string) {
@@ -89,13 +108,18 @@ test("validates a completed pass result and its trace references", () => {
   );
 });
 
-test("rejects reviewer decisions that omit a required check", () => {
+test("rejects duplicate criteria while preserving the required check count", () => {
   const contract = createReviewerAgentContract({ attempt: 1, trace, summary: "Done." });
   const result = createPassResult(contract.id);
 
   assert.throws(() => validateReviewerAgentCompletedResult(contract, {
     ...result,
-    extensions: { ...passExtensions, checks: passExtensions.checks.slice(0, 2) },
+    extensions: {
+      ...passExtensions,
+      checks: passExtensions.checks.map((check, index) => (
+        index === 2 ? { ...check, criterion: "failure_disclosure" as const } : check
+      )),
+    },
   }, trace.length));
 });
 
@@ -121,8 +145,7 @@ test("rejects revise decisions without revision instructions", () => {
   assert.throws(() => validateReviewerAgentCompletedResult(contract, {
     ...result,
     extensions: {
-      ...passExtensions,
-      decision: "revise",
+      ...reviseExtensions,
       revisionInstructions: [],
     },
   }, trace.length));
@@ -135,10 +158,76 @@ test("rejects ask_user decisions without a question", () => {
   assert.throws(() => validateReviewerAgentCompletedResult(contract, {
     ...result,
     extensions: {
-      ...passExtensions,
-      decision: "ask_user",
+      ...askUserExtensions,
       userQuestion: undefined,
     },
+  }, trace.length));
+});
+
+test("protects each reviewer decision relationship with a single-fault case", () => {
+  const cases: Array<[string, unknown]> = [
+    ["pass with a failed check", {
+      ...passExtensions,
+      checks: passExtensions.checks.map((check, index) => (
+        index === 0 ? { ...check, status: "failed" } : check
+      )),
+    }],
+    ["pass with revision instructions", {
+      ...passExtensions,
+      revisionInstructions: ["Revise it."],
+    }],
+    ["pass with a user question", {
+      ...passExtensions,
+      userQuestion: "Which behavior?",
+    }],
+    ["revise without a failed check", {
+      ...reviseExtensions,
+      checks: passExtensions.checks,
+    }],
+    ["revise with a user question", {
+      ...reviseExtensions,
+      userQuestion: "Which behavior?",
+    }],
+    ["ask_user without a needs_user check", {
+      ...askUserExtensions,
+      checks: passExtensions.checks,
+    }],
+    ["ask_user with revision instructions", {
+      ...askUserExtensions,
+      revisionInstructions: ["Revise it."],
+    }],
+  ];
+
+  for (const [boundary, extensions] of cases) {
+    assert.equal(
+      reviewerAgentExtensionsSchema.safeParse(extensions).success,
+      false,
+      boundary,
+    );
+  }
+});
+
+test("rejects a reviewer decision evidence item with swapped provenance", () => {
+  const contract = createReviewerAgentContract({ attempt: 1, trace, summary: "Done." });
+  const result = createPassResult(contract.id);
+
+  assert.throws(() => validateReviewerAgentCompletedResult(contract, {
+    ...result,
+    evidence: result.evidence.map((item) => item.kind === "review_decision"
+      ? { ...item, source: "coding-trace" }
+      : item),
+  }, trace.length));
+});
+
+test("rejects a trace reference evidence item with a fake allowed provenance", () => {
+  const contract = createReviewerAgentContract({ attempt: 1, trace, summary: "Done." });
+  const result = createPassResult(contract.id);
+
+  assert.throws(() => validateReviewerAgentCompletedResult(contract, {
+    ...result,
+    evidence: result.evidence.map((item) => item.kind === "trace_reference"
+      ? { ...item, source: "executor-summary" }
+      : item),
   }, trace.length));
 });
 

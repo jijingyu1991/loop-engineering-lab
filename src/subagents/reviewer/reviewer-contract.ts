@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   subagentContractSchema,
+  subagentResultSchema,
   validateSubagentResult,
   type SubagentContract,
   type SubagentResult,
@@ -96,6 +97,17 @@ export const reviewerAgentExtensionsSchema = z.object({
   }
 });
 
+/**
+ * SDK live output 使用 reviewer 专属 schema，而不是只约束通用 envelope。
+ * role/status 的 literal 保证模型只能提交“本角色已完成的判断”；provider/timeout
+ * 等不成功状态仍由 runSubagent 在可信运行时生成，不交给模型自行声明。
+ */
+export const reviewerAgentOutputSchema = subagentResultSchema.extend({
+  role: z.literal("reviewer-agent"),
+  status: z.literal("completed"),
+  extensions: reviewerAgentExtensionsSchema,
+});
+
 export type ReviewerAgentExtensions = z.infer<typeof reviewerAgentExtensionsSchema>;
 export type ReviewerAgentCompletedResult = Omit<SubagentResult, "status" | "extensions"> & {
   status: "completed";
@@ -169,6 +181,18 @@ export function validateReviewerAgentCompletedResult(
   const validated = validateSubagentResult(contract, result);
   if (validated.status !== "completed") {
     throw new Error("Reviewer result is not completed");
+  }
+
+  // 通用 Contract 只判断 source 是否位于允许集合，无法表达 reviewer 两类证据各自
+  // 的 provenance。这里绑定 kind 与唯一来源，防止模型交换两个合法 source，或把
+  // executor-summary 这类同样获准的 context id 冒充 trace_reference。
+  for (const evidence of validated.evidence) {
+    if (evidence.kind === "review_decision" && evidence.source !== contract.id) {
+      throw new Error("Reviewer decision evidence has invalid provenance");
+    }
+    if (evidence.kind === "trace_reference" && evidence.source !== "coding-trace") {
+      throw new Error("Reviewer trace evidence has invalid provenance");
+    }
   }
 
   const extensions = reviewerAgentExtensionsSchema.parse(validated.extensions);

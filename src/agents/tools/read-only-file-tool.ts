@@ -2,6 +2,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../../trace/trace-infrastructure-error.js";
 import { executeFileTool } from "./file-tool.js";
 import type { ToolOutcomeRecorder } from "./tool-outcome-recorder.js";
 import { createToolError, type ToolResult } from "./tool-result.js";
@@ -50,8 +51,14 @@ export function createReadOnlyFileTool(
         // 但这里固定构造 read action，模型没有任何途径选择 write 分支。
         execute: () => executeFileTool({ action: "read", path: input.path }, runtime),
       }),
-    errorFunction: async () =>
-      JSON.stringify(
+    errorFunction: async (_context, error) => {
+      // SDK 会把 execute 的异常交给 errorFunction。trace 存储故障不是模型参数错误，
+      // 必须在 adapter fallback 写入第二条 trace 之前原样抛出，否则一次性故障会被
+      // 后续成功的 fallback trace 掩盖成 invalid_input。
+      if (error instanceof TraceInfrastructureError) {
+        throw error;
+      }
+      return JSON.stringify(
         await traceToolExecution({
           tool: "file",
           operation: "adapter",
@@ -60,6 +67,7 @@ export function createReadOnlyFileTool(
           outcomeRecorder,
           execute: async () => adapterFailure(),
         }),
-      ),
+      );
+    },
   });
 }

@@ -5,6 +5,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../../trace/trace-infrastructure-error.js";
 import { resolveWorkspacePath } from "./resolve-workspace-path.js";
 import { sanitizeToolText } from "./sanitize-tool-text.js";
 import { traceToolExecution } from "./trace-tool-execution.js";
@@ -389,8 +390,13 @@ export function createSearchTool(
         outcomeRecorder,
         execute: () => executeSearchTool(input, runtime),
       }),
-    errorFunction: async () =>
-      JSON.stringify(
+    errorFunction: async (_context, error) => {
+      // execute 的 trace 基础设施故障必须穿透 SDK fallback，不能被重新解释成
+      // search 参数校验失败；这与业务级工具错误的结构化返回边界不同。
+      if (error instanceof TraceInfrastructureError) {
+        throw error;
+      }
+      return JSON.stringify(
         await traceToolExecution({
           tool: "search",
           operation: "adapter",
@@ -399,6 +405,7 @@ export function createSearchTool(
           outcomeRecorder,
           execute: async () => adapterFailure(),
         }),
-      ),
+      );
+    },
   });
 }

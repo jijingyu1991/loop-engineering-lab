@@ -11,6 +11,9 @@ import {
   createReviewerAgent,
   type ReviewerAgent,
 } from "../../src/subagents/reviewer/create-reviewer-agent.js";
+import {
+  reviewerAgentOutputSchema,
+} from "../../src/subagents/reviewer/reviewer-contract.js";
 import { runReviewerAgent } from "../../src/subagents/reviewer/run-reviewer-agent.js";
 
 const modelConfig: ModelConfig = {
@@ -29,6 +32,46 @@ const validResult = {
   errors: [],
 };
 
+const validReviewerOutput = {
+  ...validResult,
+  evidence: [
+    {
+      kind: "review_decision",
+      source: "review-coding-attempt-1",
+      summary: "pass",
+    },
+    {
+      kind: "trace_reference",
+      source: "coding-trace",
+      summary: "All checks cite trace index 0.",
+    },
+  ],
+  extensions: {
+    decision: "pass",
+    checks: [
+      {
+        criterion: "conclusion_evidence",
+        status: "passed",
+        summary: "Conclusions cite evidence.",
+        traceReferences: [0],
+      },
+      {
+        criterion: "failure_disclosure",
+        status: "passed",
+        summary: "Failures are disclosed.",
+        traceReferences: [0],
+      },
+      {
+        criterion: "required_validation",
+        status: "passed",
+        summary: "Required validation ran.",
+        traceReferences: [0],
+      },
+    ],
+    revisionInstructions: [],
+  },
+};
+
 test("creates a structured reviewer with no tools", () => {
   const agent = createReviewerAgent(modelConfig);
 
@@ -37,6 +80,34 @@ test("creates a structured reviewer with no tools", () => {
   assert.match(String(agent.instructions), /failure/i);
   assert.match(String(agent.instructions), /required validation/i);
   assert.match(String(agent.instructions), /must not.*tool/i);
+  assert.equal(agent.outputType, reviewerAgentOutputSchema);
+  assert.match(String(agent.instructions), /conclusion_evidence/);
+  assert.match(String(agent.instructions), /failure_disclosure/);
+  assert.match(String(agent.instructions), /required_validation/);
+  assert.match(String(agent.instructions), /review_decision.*contract\.id/i);
+  assert.match(String(agent.instructions), /trace_reference.*coding-trace/i);
+  assert.match(String(agent.instructions), /pass.*all three.*passed/i);
+  assert.match(String(agent.instructions), /revise.*failed/i);
+  assert.match(String(agent.instructions), /ask_user.*needs_user/i);
+});
+
+test("uses a reviewer-specific live output schema", () => {
+  assert.deepEqual(
+    reviewerAgentOutputSchema.parse(validReviewerOutput),
+    validReviewerOutput,
+  );
+  assert.equal(reviewerAgentOutputSchema.safeParse({
+    ...validReviewerOutput,
+    role: "search-agent",
+  }).success, false);
+  assert.equal(reviewerAgentOutputSchema.safeParse({
+    ...validReviewerOutput,
+    status: "failed",
+  }).success, false);
+  assert.equal(reviewerAgentOutputSchema.safeParse({
+    ...validReviewerOutput,
+    extensions: { decision: "pass" },
+  }).success, false);
 });
 
 test("passes maxSteps and signal to Runner", async () => {

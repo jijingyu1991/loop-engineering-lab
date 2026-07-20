@@ -1069,6 +1069,46 @@ test("does not report success when reviewer fails or times out", async (t) => {
   }
 });
 
+test("normalizes reviewer boundary exceptions as reviewer_failed", async () => {
+  const traceWriter = new MemoryTraceWriter();
+
+  const result = await runCodingMode({
+    request: "Explain the workflow",
+    activeModel: "test-model",
+    tracePath: "traces/reviewer-contract-overflow.jsonl",
+    maxSteps: 3,
+    traceWriter,
+    classifier: async () => ({
+      taskType: "explain_module",
+      objective: "Explain the workflow",
+      reason: "Explanation requested",
+    }),
+    executor: async () => ({
+      type: "completed",
+      output: "Unreviewed summary",
+      evidence: [],
+    }),
+    reviewer: async ({ attempt, trace, summary }) => {
+      createReviewerAgentContract({
+        attempt,
+        trace,
+        summary,
+        maxChars: 1,
+      });
+      return createPassReview(trace.length);
+    },
+    traceSnapshot: () => traceWriter.snapshot(),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.stopReason, "reviewer_failed");
+  assert.equal(result.finalOutput, null);
+  assert.equal(
+    traceWriter.events.some((event) => event.event === "workflow_step_failed"),
+    false,
+  );
+});
+
 test("stops a repeated revise loop at maxSteps", async () => {
   const traceWriter = new MemoryTraceWriter();
   let executorCalls = 0;

@@ -13,12 +13,28 @@ import {
 } from "../../src/agents/tools/tool-runtime-config.js";
 import { parseLoopConfig } from "../../src/config/config-schema.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
+import { TraceInfrastructureError } from "../../src/trace/trace-infrastructure-error.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
+import { RecordingTraceWriter } from "../../src/trace/recording-trace-writer.js";
 
 class MemoryTraceWriter implements TraceWriter {
   public readonly events: TraceEvent[] = [];
 
   public async write(event: TraceEvent): Promise<void> {
+    this.events.push(event);
+  }
+}
+
+class FailOnceTraceWriter implements TraceWriter {
+  public readonly events: TraceEvent[] = [];
+  public readonly failure = new Error("trace unavailable once");
+  private failed = false;
+
+  public async write(event: TraceEvent): Promise<void> {
+    if (!this.failed) {
+      this.failed = true;
+      throw this.failure;
+    }
     this.events.push(event);
   }
 }
@@ -135,4 +151,47 @@ test("keeps coding shell adapter validation failures structured and traced", asy
   assert.ok(traceWriter.events.some(
     (event) => event.event === "tool_failed" && event.operation === "adapter",
   ));
+});
+
+test("does not let coding tool SDK fallbacks swallow trace infrastructure failures", async (t) => {
+  const cases = [
+    {
+      name: "read-only file",
+      toolName: "workspace_file_read",
+      input: { path: "package.json" },
+    },
+    {
+      name: "search",
+      toolName: "workspace_search",
+      input: { pattern: "scripts", path: ".", regex: false, glob: null },
+    },
+    {
+      name: "shell",
+      toolName: "workspace_shell",
+      input: { executable: "git", args: ["status"], cwd: "." },
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const downstream = new FailOnceTraceWriter();
+      const traceWriter = new RecordingTraceWriter(downstream);
+      const tools = createCodingTools(
+        createCodingToolRuntimeConfig(configuredRuntime()),
+        traceWriter,
+        createToolOutcomeRecorder(),
+      );
+      const sdkTool = tools.find((item) => item.name === testCase.toolName);
+      assert.ok(sdkTool && sdkTool.type === "function");
+
+      await assert.rejects(
+        sdkTool.invoke(new RunContext(), JSON.stringify(testCase.input)),
+        (error: unknown) => {
+          assert.ok(error instanceof TraceInfrastructureError);
+          assert.equal(error.cause, downstream.failure);
+          return true;
+        },
+      );
+    });
+  }
 });

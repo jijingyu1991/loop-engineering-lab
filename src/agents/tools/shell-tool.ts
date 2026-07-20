@@ -4,6 +4,7 @@ import { tool } from "@openai/agents";
 import { z } from "zod";
 
 import type { TraceWriter } from "../../trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../../trace/trace-infrastructure-error.js";
 import { resolveWorkspacePath } from "./resolve-workspace-path.js";
 import { sanitizeToolText } from "./sanitize-tool-text.js";
 import { traceToolExecution } from "./trace-tool-execution.js";
@@ -355,8 +356,13 @@ export function createShellTool(
         // 通过同一执行路径。denied 与 workspace 越界仍由执行器再次防御。
         execute: () => executeShellTool(input, runtime, { approvalGranted: true }),
       }),
-    errorFunction: async () =>
-      JSON.stringify(
+    errorFunction: async (_context, error) => {
+      // shell execute 抛出的 trace 基础设施故障不能进入参数 fallback。保留专用错误
+      // 让 workflow 顶层拒绝运行，避免审计记录缺失时仍把执行当成普通工具失败。
+      if (error instanceof TraceInfrastructureError) {
+        throw error;
+      }
+      return JSON.stringify(
         await traceToolExecution({
           tool: "shell",
           operation: "adapter",
@@ -365,6 +371,7 @@ export function createShellTool(
           outcomeRecorder,
           execute: async () => adapterFailure(),
         }),
-      ),
+      );
+    },
   });
 }
