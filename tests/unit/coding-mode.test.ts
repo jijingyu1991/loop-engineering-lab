@@ -6,9 +6,13 @@ import { createCodingWorkflow } from "../../src/modes/coding/create-coding-workf
 import { runCodingMode } from "../../src/modes/coding/run-coding-mode.js";
 import type { CodingExecutor } from "../../src/modes/coding/coding-state.js";
 import type { CodingTaskType } from "../../src/modes/coding/coding-task.js";
-import type {
-  ReviewerAgentCompletedResult,
+import {
+  createReviewerAgentContract,
+  type ReviewerAgentCompletedResult,
+  validateReviewerAgentCompletedResult,
 } from "../../src/subagents/reviewer/reviewer-contract.js";
+import { runSubagent } from "../../src/subagents/run-subagent.js";
+import { RecordingTraceWriter } from "../../src/trace/recording-trace-writer.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
 
@@ -21,6 +25,24 @@ class MemoryTraceWriter implements TraceWriter {
 
   public snapshot(): readonly TraceEvent[] {
     return [...this.events];
+  }
+}
+
+class FailOnceTraceWriter implements TraceWriter {
+  public readonly events: TraceEvent[] = [];
+  public failed = false;
+
+  public constructor(
+    private readonly targetEvent: TraceEvent["event"],
+    private readonly failure: Error,
+  ) {}
+
+  public async write(event: TraceEvent): Promise<void> {
+    if (!this.failed && event.event === this.targetEvent) {
+      this.failed = true;
+      throw this.failure;
+    }
+    this.events.push(event);
   }
 }
 
@@ -407,6 +429,96 @@ test("rejects when the trace writer fails", async () => {
     }),
     /trace unavailable/,
   );
+});
+
+test("rejects composed coding runs when an internal trace write fails", async (t) => {
+  for (const targetEvent of [
+    "coding_execution_completed",
+    "subagent_started",
+    "subagent_finished",
+  ] as const) {
+    await t.test(targetEvent, async () => {
+      const traceFailure = new Error(`trace unavailable: ${targetEvent}`);
+      const downstream = new FailOnceTraceWriter(targetEvent, traceFailure);
+      const traceJournal = new RecordingTraceWriter(downstream);
+      let reviewerCalls = 0;
+
+      await assert.rejects(runCodingMode({
+        request: "Explain the module",
+        activeModel: "test-model",
+        tracePath: `traces/${targetEvent}.jsonl`,
+        maxSteps: 2,
+        traceWriter: traceJournal,
+        classifier: async () => ({
+          taskType: "explain_module",
+          objective: "Explain the module",
+          reason: "Explanation requested",
+        }),
+        executor: async () => ({
+          type: "completed",
+          output: "Trace-backed explanation",
+          evidence: [],
+        }),
+        reviewer: async ({ attempt, trace, summary }) => {
+          reviewerCalls += 1;
+          const contract = createReviewerAgentContract({ attempt, trace, summary });
+          const review = createPassReview(trace.length);
+          const result = await runSubagent({
+            contract,
+            traceWriter: traceJournal,
+            invoker: async () => ({
+              ...review,
+              contractId: contract.id,
+              evidence: [
+                {
+                  kind: "review_decision",
+                  source: contract.id,
+                  summary: "pass",
+                },
+                {
+                  kind: "trace_reference",
+                  source: "coding-trace",
+                  summary: "Referenced the frozen execution trace.",
+                },
+              ],
+            }),
+            validateCompletedResult: (validatedContract, completedResult) =>
+              validateReviewerAgentCompletedResult(
+                validatedContract,
+                completedResult,
+                trace.length,
+              ),
+          });
+          if (result.status === "completed") {
+            return validateReviewerAgentCompletedResult(
+              contract,
+              result,
+              trace.length,
+            );
+          }
+          return { ...result, status: result.status };
+        },
+        traceSnapshot: () => traceJournal.snapshot(),
+      }), (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, traceFailure.message);
+        // production 可以原样重抛，也可以用稳定的 infrastructure error 保留 cause；
+        // 两种方式都必须让调用方取得最初的存储故障，而不是业务失败摘要。
+        assert.equal(error === traceFailure || error.cause === traceFailure, true);
+        return true;
+      });
+
+      assert.equal(downstream.failed, true);
+      assert.equal(
+        downstream.events.some((event) => event.event === "workflow_step_failed"),
+        false,
+      );
+      assert.equal(
+        reviewerCalls,
+        targetEvent === "coding_execution_completed" ? 0 : 1,
+      );
+    });
+  }
 });
 
 test("rejects an empty request before writing the start trace", async () => {

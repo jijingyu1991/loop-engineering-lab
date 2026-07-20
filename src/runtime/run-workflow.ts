@@ -1,5 +1,6 @@
 import type { StepError } from "../domain/stage-result.js";
 import type { TraceWriter } from "../trace/jsonl-trace-writer.js";
+import { TraceInfrastructureError } from "../trace/trace-infrastructure-error.js";
 import type {
   WorkflowDefinition,
   WorkflowRunResult,
@@ -61,8 +62,14 @@ export async function runWorkflow<State>(options: {
     try {
       result = await step.run(state);
     } catch (error) {
-      // 捕获范围只包含业务 step；trace 写入故障不能被伪装成普通 workflow 失败，
-      // 必须原样 reject，让调用方知道审计链已经不完整。
+      // step.run 可以间接调用工具、reviewer 或子 workflow；这些层的 trace 写入也位于
+      // 本 catch 范围内。RecordingTraceWriter 已在持久化边界标记此类故障，必须连同
+      // 原始 cause 向上重抛，不能再写 workflow_step_failed 来伪装成普通业务失败。
+      if (error instanceof TraceInfrastructureError) {
+        throw error;
+      }
+
+      // 只有普通业务异常走稳定失败终态；该行为与既有 workflow 合同保持一致。
       await traceWriter.write({
         event: "workflow_step_failed",
         timestamp: now(),

@@ -115,6 +115,32 @@ test("stops at the workflow step limit", async () => {
   assert.equal(result.stopReason, "max_workflow_steps_exceeded");
 });
 
+test("normalizes an ordinary step exception as a workflow failure", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const definition: WorkflowDefinition<State> = {
+    initialStep: "business_failure",
+    steps: new Map([["business_failure", {
+      name: "business_failure",
+      run: async () => { throw new Error("business rule failed"); },
+    }]]),
+  };
+
+  const result = await runWorkflow({
+    definition,
+    initialState: { visits: [] },
+    maxSteps: 1,
+    traceWriter,
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.stopReason, "workflow_step_failed");
+  const failureEvent = traceWriter.events.at(-1);
+  assert.equal(failureEvent?.event, "workflow_step_failed");
+  if (failureEvent?.event === "workflow_step_failed") {
+    assert.equal(failureEvent.error.message, "business rule failed");
+  }
+});
+
 test("propagates trace write failures", async () => {
   const definition: WorkflowDefinition<State> = {
     initialStep: "done",
