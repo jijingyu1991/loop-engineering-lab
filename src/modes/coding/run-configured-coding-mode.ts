@@ -26,6 +26,7 @@ import type { CodingRunResult } from "./coding-state.js";
 import { createCodingAgent } from "./create-coding-agent.js";
 import { runCodingAgent } from "./run-coding-agent.js";
 import { runCodingMode } from "./run-coding-mode.js";
+import { runCodingModeWithHandoff } from "./run-coding-mode-with-handoff.js";
 
 /**
  * 组装 executor 的完整提示词，同时保留用户原始请求和分类依据。
@@ -85,9 +86,11 @@ export async function runConfiguredCodingMode(
   // 再按同一顺序进入 reviewer 可见快照；落盘失败会原样 reject，不产生内存幻象。
   const traceJournal = new RecordingTraceWriter(traceWriter);
   const runner = createRunner(loaded.modelConfig, loaded.apiKey);
-  const toolRuntime = createCodingToolRuntimeConfig(
-    createToolRuntimeConfig(loaded.config, process.cwd()),
+  const workspaceRuntime = createToolRuntimeConfig(
+    loaded.config,
+    process.cwd(),
   );
+  const toolRuntime = createCodingToolRuntimeConfig(workspaceRuntime);
   const outcomeRecorder = createToolOutcomeRecorder();
   const tools = createCodingTools(toolRuntime, traceJournal, outcomeRecorder);
   const classifierAgent = createCodingClassifierAgent(loaded.modelConfig);
@@ -100,75 +103,80 @@ export async function runConfiguredCodingMode(
   // 的 terminal/approval 事件由不同时间源生成而破坏确定性测试与审计排序。
   const now = () => new Date().toISOString();
 
-  return runCodingMode({
+  return runCodingModeWithHandoff({
     request,
-    activeModel: loaded.activeModelName,
-    tracePath,
-    maxSteps: loaded.config.safetyLimits.maxSteps,
-    traceWriter: traceJournal,
+    workspaceRoot: workspaceRuntime.workspaceRoot,
     traceSnapshot: () => traceJournal.snapshot(),
-    now,
-    classifier: (rawRequest) =>
-      classifyCodingRequest(runner, classifierAgent, rawRequest, maxTurns),
-    executor: ({
-      request: rawRequest,
-      classification,
-      instructions,
-      revisionInstructions,
-    }) => {
-      const prompt = createCodingExecutorPrompt({
+    run: () => runCodingMode({
+      request,
+      activeModel: loaded.activeModelName,
+      tracePath,
+      maxSteps: loaded.config.safetyLimits.maxSteps,
+      traceWriter: traceJournal,
+      traceSnapshot: () => traceJournal.snapshot(),
+      now,
+      classifier: (rawRequest) =>
+        classifyCodingRequest(runner, classifierAgent, rawRequest, maxTurns),
+      executor: ({
         request: rawRequest,
-        objective: classification.objective,
-        classificationReason: classification.reason,
-        workflowInstructions: instructions,
+        classification,
+        instructions,
         revisionInstructions,
-      });
+      }) => {
+        const prompt = createCodingExecutorPrompt({
+          request: rawRequest,
+          objective: classification.objective,
+          classificationReason: classification.reason,
+          workflowInstructions: instructions,
+          revisionInstructions,
+        });
 
-      return runCodingAgent({
-        runner,
-        agent: codingAgent,
-        prompt,
-        maxTurns,
-        traceWriter: traceJournal,
-        now,
-      });
-    },
-    reviewer: async ({ attempt, trace, summary }) => {
-      // workflow 在 coding_execution_completed 持久化后传入冻结快照；Contract 将完整
-      // trace 和 summary 作为仅有上下文，并由 maxChars 边界拒绝超限而非静默截断。
-      const contract = createReviewerAgentContract({
-        attempt,
-        trace,
-        summary,
-        // timeout 属于当前 active model 的运行特征。显式传入 Contract 后，通用
-        // subagent runtime 仍只执行预算，不需要知道 DeepSeek 或 GPT 等 provider。
-        timeoutMs: loaded.modelConfig.reviewerTimeoutMs,
-      });
-      const result = await runSubagent({
-        contract,
-        traceWriter: traceJournal,
-        now,
-        invoker: (invocation) => runReviewerAgent({
-          ...invocation,
+        return runCodingAgent({
           runner,
-          agent: reviewerAgent,
-        }),
-        validateCompletedResult: (validatedContract, completedResult) =>
-          validateReviewerAgentCompletedResult(
-            validatedContract,
-            completedResult,
-            trace.length,
-          ),
-      });
-      if (result.status === "completed") {
-        // runSubagent 已执行同一校验；再次解析只用于把统一 envelope 收窄为角色判别联合。
-        // trace.length 来自创建 Contract 的冻结快照，后续 lifecycle event 不得扩大引用范围。
-        return validateReviewerAgentCompletedResult(contract, result, trace.length);
-      }
-      // Zod 产出的通用 SubagentResult 是可变对象，TypeScript 不会在直接 return 时保留
-      // status 属性的排除式收窄；复制 envelope 并显式覆盖判别字段，不改变运行时内容，
-      // 同时保证 reviewer callback 只能返回 unsuccessful 联合中的三个状态。
-      return { ...result, status: result.status };
-    },
+          agent: codingAgent,
+          prompt,
+          maxTurns,
+          traceWriter: traceJournal,
+          now,
+        });
+      },
+      reviewer: async ({ attempt, trace, summary }) => {
+        // workflow 在 coding_execution_completed 持久化后传入冻结快照；Contract 将完整
+        // trace 和 summary 作为仅有上下文，并由 maxChars 边界拒绝超限而非静默截断。
+        const contract = createReviewerAgentContract({
+          attempt,
+          trace,
+          summary,
+          // timeout 属于当前 active model 的运行特征。显式传入 Contract 后，通用
+          // subagent runtime 仍只执行预算，不需要知道 DeepSeek 或 GPT 等 provider。
+          timeoutMs: loaded.modelConfig.reviewerTimeoutMs,
+        });
+        const result = await runSubagent({
+          contract,
+          traceWriter: traceJournal,
+          now,
+          invoker: (invocation) => runReviewerAgent({
+            ...invocation,
+            runner,
+            agent: reviewerAgent,
+          }),
+          validateCompletedResult: (validatedContract, completedResult) =>
+            validateReviewerAgentCompletedResult(
+              validatedContract,
+              completedResult,
+              trace.length,
+            ),
+        });
+        if (result.status === "completed") {
+          // runSubagent 已执行同一校验；再次解析只用于把统一 envelope 收窄为角色判别联合。
+          // trace.length 来自创建 Contract 的冻结快照，后续 lifecycle event 不得扩大引用范围。
+          return validateReviewerAgentCompletedResult(contract, result, trace.length);
+        }
+        // Zod 产出的通用 SubagentResult 是可变对象，TypeScript 不会在直接 return 时保留
+        // status 属性的排除式收窄；复制 envelope 并显式覆盖判别字段，不改变运行时内容，
+        // 同时保证 reviewer callback 只能返回 unsuccessful 联合中的三个状态。
+        return { ...result, status: result.status };
+      },
+    }),
   });
 }

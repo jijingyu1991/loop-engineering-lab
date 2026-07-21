@@ -180,6 +180,16 @@ Coding mode 目前只向 Agent 暴露文件读取、workspace 搜索和经过权
 文件及 `dist/` 等生成物；因此这里的边界是 Coding mode 不会有意编辑源文件，而不是保证
 执行前后 workspace 的每个文件都保持不变。
 
+### Handoff artifact
+
+每次 Coding mode 进入 `completed`、`failed`、`blocked` 或 `cancelled` 终态后，都会
+原子更新 workspace 根目录的 `handoff.md`。它只保留目标、当前状态、已完成步骤、开放
+问题、关键证据、失败尝试和下一步行动，供新 Agent 或人类继续任务。完整事件历史仍位于
+本次 JSONL trace；`handoff.md` 不复制长日志、原始 prompt 或 shell stdout/stderr。
+
+如果 handoff 写入失败，命令会明确失败，且上一份完整的 `handoff.md` 不会被半写内容
+替换。若 Coding runtime 在产生终态前异常退出，则不会用推测状态覆盖已有 handoff。
+
 ### Reviewer subagent
 
 每次 Coding executor 产出 summary 后，都会由独立 reviewer-agent 读取本次已持久化的
