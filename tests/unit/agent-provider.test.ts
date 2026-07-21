@@ -14,6 +14,7 @@ const gptConfig: ModelConfig = {
   baseURL: "https://api.openai.com/v1",
   apiKeyEnv: "OPENAI_API_KEY",
   api: "responses",
+  reviewerTimeoutMs: 15_000,
 };
 
 const deepSeekConfig: ModelConfig = {
@@ -21,6 +22,7 @@ const deepSeekConfig: ModelConfig = {
   baseURL: "https://api.deepseek.com",
   apiKeyEnv: "DEEPSEEK_API_KEY",
   api: "chat_completions",
+  reviewerTimeoutMs: 45_000,
 };
 
 test("maps GPT configuration to a Responses provider", () => {

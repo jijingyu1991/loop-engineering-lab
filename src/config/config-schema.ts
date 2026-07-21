@@ -10,6 +10,10 @@ export const modelConfigSchema = z.object({
   baseURL: z.url(),
   apiKeyEnv: z.string().min(1),
   api: z.enum(["responses", "chat_completions"]),
+  // Reviewer 需要生成带证据引用的严格结构化结果，延迟特征可能与主 Agent 不同。
+  // 预算放在模型配置而不是按 API 类型推断，使不同 provider 可以独立调优；默认值
+  // 保持旧配置与原有 15 秒行为兼容。
+  reviewerTimeoutMs: z.number().int().positive().default(15_000),
 });
 
 const executableRuleSchema = z.object({

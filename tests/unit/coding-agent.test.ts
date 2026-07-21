@@ -37,6 +37,7 @@ const modelConfig: ModelConfig = {
   baseURL: "https://api.openai.com/v1",
   apiKeyEnv: "OPENAI_API_KEY",
   api: "responses",
+  reviewerTimeoutMs: 15_000,
 };
 
 test("creates a tool-free structured coding classifier", () => {

@@ -136,7 +136,14 @@ export async function runConfiguredCodingMode(
     reviewer: async ({ attempt, trace, summary }) => {
       // workflow 在 coding_execution_completed 持久化后传入冻结快照；Contract 将完整
       // trace 和 summary 作为仅有上下文，并由 maxChars 边界拒绝超限而非静默截断。
-      const contract = createReviewerAgentContract({ attempt, trace, summary });
+      const contract = createReviewerAgentContract({
+        attempt,
+        trace,
+        summary,
+        // timeout 属于当前 active model 的运行特征。显式传入 Contract 后，通用
+        // subagent runtime 仍只执行预算，不需要知道 DeepSeek 或 GPT 等 provider。
+        timeoutMs: loaded.modelConfig.reviewerTimeoutMs,
+      });
       const result = await runSubagent({
         contract,
         traceWriter: traceJournal,

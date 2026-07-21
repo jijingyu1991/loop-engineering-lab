@@ -5,13 +5,15 @@
       "model": "gpt-5.4-nano-2026-03-17",
       "baseURL": "https://api.uniapi.io/v1",
       "apiKeyEnv": "OPENAI_API_KEY",
-      "api": "responses"
+      "api": "responses",
+      "reviewerTimeoutMs": 15000
     },
     "deepseek": {
       "model": "deepseek-v4-flash",
       "baseURL": "https://api.deepseek.com",
       "apiKeyEnv": "DEEPSEEK_API_KEY",
-      "api": "chat_completions"
+      "api": "chat_completions",
+      "reviewerTimeoutMs": 45000
     }
   },
   "safetyLimits": {
