@@ -532,3 +532,92 @@ test("compacts an interleaved parallel tool batch without reordering or splittin
     measureModelInput(compacted.instructions ?? "", compacted.input) <= 3_600,
   );
 });
+
+test("writes started then failed for over-budget invalid tool history", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const orphanResult = {
+    type: "function_call_result" as const,
+    callId: "orphan-call",
+    name: "workspace_shell",
+    status: "completed" as const,
+    output: "x".repeat(2_000),
+  };
+
+  await assert.rejects(
+    () => compactCodingContext({
+      modelData: {
+        instructions: "Reject malformed history.",
+        input: [orphanResult],
+      },
+      config: {
+        maxInputChars: 500,
+        keepRecentItems: 1,
+        maxToolSummaryChars: 200,
+      },
+      pinnedEvidence: [],
+      traceWriter,
+      now: () => "2026-07-22T00:00:00.000Z",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "reason" in error &&
+      error.reason === "invalid_tool_history",
+  );
+
+  assert.deepEqual(
+    traceWriter.events.map((event) => event.event),
+    ["context_compaction_started", "context_compaction_failed"],
+  );
+  const started = traceWriter.events[0];
+  const failed = traceWriter.events[1];
+  assert.ok(started?.event === "context_compaction_started");
+  assert.equal(started.logicalGroups, 0);
+  assert.ok(failed?.event === "context_compaction_failed");
+  assert.equal(failed.reason, "invalid_tool_history");
+  assert.equal(
+    traceWriter.events.some((event) => event.event === "context_compaction_completed"),
+    false,
+  );
+});
+
+for (const rejectedEvent of [
+  "context_compaction_started",
+  "context_compaction_failed",
+] as const) {
+  test(`preserves an invalid-history ${rejectedEvent} writer failure`, async () => {
+    const traceFailure = new Error(`${rejectedEvent} persistence failed`);
+    const traceWriter = new class extends MemoryTraceWriter {
+      public override async write(event: TraceEvent): Promise<void> {
+        if (event.event === rejectedEvent) {
+          throw traceFailure;
+        }
+
+        await super.write(event);
+      }
+    }();
+
+    await assert.rejects(
+      () => compactCodingContext({
+        modelData: {
+          instructions: "Reject malformed history.",
+          input: [{
+            type: "function_call_result",
+            callId: "orphan-call",
+            name: "workspace_shell",
+            status: "completed",
+            output: "x".repeat(2_000),
+          }],
+        },
+        config: {
+          maxInputChars: 500,
+          keepRecentItems: 1,
+          maxToolSummaryChars: 200,
+        },
+        pinnedEvidence: [],
+        traceWriter,
+        now: () => "2026-07-22T00:00:00.000Z",
+      }),
+      (error: unknown) => error === traceFailure,
+    );
+  });
+}

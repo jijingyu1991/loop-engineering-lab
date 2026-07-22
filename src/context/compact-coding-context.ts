@@ -58,16 +58,16 @@ export async function compactCodingContext(
     return modelData;
   }
 
-  const groups = groupContextItems(modelData.input);
-
-  await traceWriter.write({
-    event: "context_compaction_started",
-    timestamp: now(),
-    budgetChars: config.maxInputChars,
-    beforeChars,
-    inputItems: modelData.input.length,
-    logicalGroups: groups.length,
-  });
+  async function writeStarted(logicalGroups: number): Promise<void> {
+    await traceWriter.write({
+      event: "context_compaction_started",
+      timestamp: now(),
+      budgetChars: config.maxInputChars,
+      beforeChars,
+      inputItems: modelData.input.length,
+      logicalGroups,
+    });
+  }
 
   /**
    * 这里只记录算法可预期的预算失败。writer 的 reject 不在 catch 范围内，因而仍以
@@ -86,6 +86,25 @@ export async function compactCodingContext(
     });
     throw new ContextBudgetExceededError(reason, message);
   }
+
+  let groups: ContextItemGroup[];
+  try {
+    groups = groupContextItems(modelData.input);
+  } catch (error) {
+    if (
+      error instanceof ContextBudgetExceededError &&
+      error.reason === "invalid_tool_history"
+    ) {
+      // 分组校验失败时不存在可信的逻辑组数量。0 是明确、稳定的 sentinel，不能用
+      // 部分扫描结果冒充完整分组；输入 item 数仍记录真实值，便于审计失败规模。
+      await writeStarted(0);
+      return failCompaction(error.reason, error.message);
+    }
+
+    throw error;
+  }
+
+  await writeStarted(groups.length);
 
   const recentStart = Math.max(0, groups.length - config.keepRecentItems);
   const compactedGroups: CompactedGroup[] = [];
