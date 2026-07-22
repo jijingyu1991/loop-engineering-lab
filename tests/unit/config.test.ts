@@ -40,6 +40,29 @@ test("defaults reviewer timeout for legacy model configuration", () => {
   assert.equal(parsed.models.gpt?.reviewerTimeoutMs, 15_000);
 });
 
+test("defaults context compaction for legacy config files", () => {
+  const parsed = parseLoopConfig(validConfig);
+
+  assert.deepEqual(parsed.contextCompaction, {
+    maxInputChars: 60_000,
+    keepRecentItems: 8,
+    maxToolSummaryChars: 1_200,
+  });
+});
+
+test("rejects non-positive context compaction limits", () => {
+  assert.throws(() =>
+    parseLoopConfig({
+      ...validConfig,
+      contextCompaction: {
+        maxInputChars: 0,
+        keepRecentItems: 8,
+        maxToolSummaryChars: 1_200,
+      },
+    }),
+  );
+});
+
 test("rejects an unknown activeModel", () => {
   assert.throws(
     () => parseLoopConfig({ ...validConfig, activeModel: "missing" }),
@@ -126,6 +149,11 @@ test("checked-in config declares global workspace and shell approval rules", asy
   const parsed = parseLoopConfig(raw);
 
   assert.equal(parsed.tools.workspaceRoot, ".");
+  assert.deepEqual(parsed.contextCompaction, {
+    maxInputChars: 60_000,
+    keepRecentItems: 8,
+    maxToolSummaryChars: 1_200,
+  });
   assert.equal(parsed.models.gpt?.reviewerTimeoutMs, 15_000);
   assert.equal(parsed.models.deepseek?.reviewerTimeoutMs, 45_000);
   assert.ok(

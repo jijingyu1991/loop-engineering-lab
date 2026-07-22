@@ -165,6 +165,55 @@ export interface SubagentFinishedEvent {
   result: SubagentResult;
 }
 
+export type ContextCompactionFailureReason =
+  | "invalid_tool_history"
+  | "pinned_content_exceeds_budget";
+
+/**
+ * 仅当输入确实超过预算、即将开始压缩时才写入。这里记录压缩前的稳定统计值，
+ * 让 trace 能解释为什么发生压缩，同时避免复制可能很大的原始模型输入。
+ */
+export interface ContextCompactionStartedEvent {
+  event: "context_compaction_started";
+  timestamp: string;
+  budgetChars: number;
+  beforeChars: number;
+  inputItems: number;
+  logicalGroups: number;
+}
+
+/**
+ * 完成事件只保留可审计的计数、固定 evidence 标识和已清洗摘要元数据。完整工具
+ * 内容继续由既有 tool trace 负责，防止 compaction trace 再次突破输入预算。
+ */
+export interface ContextCompactionCompletedEvent {
+  event: "context_compaction_completed";
+  timestamp: string;
+  budgetChars: number;
+  beforeChars: number;
+  afterChars: number;
+  retainedGroups: number;
+  summarizedToolResults: number;
+  pinnedEvidenceIds: string[];
+  summaries: Array<{
+    callId: string;
+    status: "succeeded" | "failed";
+    summaryChars: number;
+  }>;
+}
+
+/**
+ * 失败原因限定为算法可预期且能安全分类的边界；基础设施写入失败由调用方继续
+ * 以 TraceInfrastructureError 处理，不能被误记成普通 compaction 失败。
+ */
+export interface ContextCompactionFailedEvent {
+  event: "context_compaction_failed";
+  timestamp: string;
+  budgetChars: number;
+  beforeChars: number;
+  reason: ContextCompactionFailureReason;
+}
+
 export interface CodingRunStoppedEvent {
   event: "coding_run_stopped";
   timestamp: string;
@@ -192,4 +241,7 @@ export type TraceEvent =
   | CodingExecutionCompletedEvent
   | SubagentStartedEvent
   | SubagentFinishedEvent
+  | ContextCompactionStartedEvent
+  | ContextCompactionCompletedEvent
+  | ContextCompactionFailedEvent
   | CodingRunStoppedEvent;

@@ -20,6 +20,11 @@
     "maxSteps": 3,
     "maxTurns": 30
   },
+  "contextCompaction": {
+    "maxInputChars": 60000,
+    "keepRecentItems": 8,
+    "maxToolSummaryChars": 1200
+  },
   "tools": {
     "workspaceRoot": ".",
     "file": {

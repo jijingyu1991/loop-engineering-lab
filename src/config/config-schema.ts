@@ -65,6 +65,17 @@ const toolsConfigSchema = z
   })
   .prefault({});
 
+// Context compaction 是 Coding workflow 的资源边界。使用 prefault({}) 而非
+// optional，能让旧版配置在未声明此区块时仍取得完整、经过校验的策略对象，避免
+// 调用端分别处理 undefined 和默认值而产生不一致的预算行为。
+const contextCompactionConfigSchema = z
+  .object({
+    maxInputChars: z.number().int().positive().default(60_000),
+    keepRecentItems: z.number().int().positive().default(8),
+    maxToolSummaryChars: z.number().int().positive().default(1_200),
+  })
+  .prefault({});
+
 function isPrefix(left: string[], right: string[]): boolean {
   return (
     left.length <= right.length &&
@@ -80,6 +91,7 @@ export const loopConfigSchema = z
       maxSteps: z.number().int().positive(),
       maxTurns: z.number().int().positive(),
     }),
+    contextCompaction: contextCompactionConfigSchema,
     tracePath: z.string().min(1),
     tools: toolsConfigSchema,
   })
@@ -116,6 +128,9 @@ export const loopConfigSchema = z
   });
 
 export type ModelConfig = z.infer<typeof modelConfigSchema>;
+export type ContextCompactionConfig = z.infer<
+  typeof contextCompactionConfigSchema
+>;
 export type LoopConfig = z.infer<typeof loopConfigSchema>;
 
 export interface LoadedLoopConfig {
