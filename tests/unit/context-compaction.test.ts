@@ -24,6 +24,21 @@ const result = {
   output: JSON.stringify({ ok: true, data: { stdout: "x".repeat(2_000) } }),
 };
 
+const secondCall = {
+  type: "function_call" as const,
+  callId: "call-2",
+  name: "workspace_file",
+  arguments: JSON.stringify({ path: "README.md" }),
+};
+
+const secondResult = {
+  type: "function_call_result" as const,
+  callId: "call-2",
+  name: "workspace_file",
+  status: "completed" as const,
+  output: JSON.stringify({ ok: true, data: { path: "README.md" } }),
+};
+
 test("measures instructions and input with one canonical JSON serialization", () => {
   const instructions = "Preserve useful evidence.";
   const input: AgentInputItem[] = [
@@ -49,6 +64,15 @@ test("groups a function call and result atomically", () => {
   assert.equal(groups[1]?.callId, "call-1");
 });
 
+test("groups interleaved distinct tool calls without changing source order", () => {
+  const input = [call, secondCall, result, secondResult];
+  const groups = groupContextItems(input);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.kind, "function_tool");
+  assert.deepEqual(groups.flatMap((group) => group.items), input);
+});
+
 test("rejects an orphan function result", () => {
   assert.throws(
     () => groupContextItems([result]),
@@ -60,6 +84,20 @@ test("rejects a function result that appears before its call", () => {
   assert.throws(
     () => groupContextItems([result, call]),
     /orphan function result/i,
+  );
+});
+
+test("rejects duplicate function calls", () => {
+  assert.throws(
+    () => groupContextItems([call, { ...call, arguments: "{}" }, result]),
+    /duplicate function call/i,
+  );
+});
+
+test("rejects duplicate function results", () => {
+  assert.throws(
+    () => groupContextItems([call, result, { ...result, output: "{}" }]),
+    /duplicate function result/i,
   );
 });
 
@@ -108,6 +146,7 @@ test("preserves required failed-tool evidence or fails closed when it cannot fit
   assert.ok(group);
 
   const summary = summarizeFunctionResult(group, 800);
+  const repeatSummary = summarizeFunctionResult(group, 800);
   const output = JSON.parse(String(summary.item.output)) as Record<string, unknown>;
   const error = output.error as Record<string, unknown>;
 
@@ -122,6 +161,7 @@ test("preserves required failed-tool evidence or fails closed when it cannot fit
   assert.equal(output.conclusion, "attempt_failed");
   assert.ok(String(summary.item.output).length <= 800);
   assert.equal(summary.manifest.status, "failed");
+  assert.deepEqual(summary, repeatSummary);
 
   assert.throws(
     () => summarizeFunctionResult(group, 20),

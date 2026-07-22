@@ -61,26 +61,35 @@ export function groupContextItems(input: AgentInputItem[]): ContextItemGroup[] {
   }
 
   const groups: ContextItemGroup[] = [];
-  const groupedResults = new Set<string>();
+  let pendingToolItems: AgentInputItem[] | undefined;
+  let openCallIds: Set<string> | undefined;
+  let batchCallIds: Set<string> | undefined;
 
   for (const item of input) {
-    if (isFunctionCall(item)) {
-      const indexedResult = results.get(item.callId);
-      if (!indexedResult) {
-        throw invalidToolHistory(`Orphan function call for callId ${item.callId}.`);
+    if (pendingToolItems && openCallIds && batchCallIds) {
+      pendingToolItems.push(item);
+
+      if (isFunctionCall(item)) {
+        openCallIds.add(item.callId);
+        batchCallIds.add(item.callId);
+      } else if (isFunctionCallResult(item)) {
+        openCallIds.delete(item.callId);
       }
 
-      groups.push({
-        items: [item, indexedResult.item],
-        callId: item.callId,
-        functionName: item.name,
-        kind: "function_tool",
-      });
-      groupedResults.add(item.callId);
+      if (openCallIds.size === 0) {
+        groups.push(createFunctionToolGroup(pendingToolItems, batchCallIds));
+        pendingToolItems = undefined;
+        openCallIds = undefined;
+        batchCallIds = undefined;
+      }
+
       continue;
     }
 
-    if (isFunctionCallResult(item) && groupedResults.has(item.callId)) {
+    if (isFunctionCall(item)) {
+      pendingToolItems = [item];
+      openCallIds = new Set([item.callId]);
+      batchCallIds = new Set([item.callId]);
       continue;
     }
 
@@ -91,6 +100,28 @@ export function groupContextItems(input: AgentInputItem[]): ContextItemGroup[] {
   }
 
   return groups;
+}
+
+/**
+ * 同一轮中交错发起的并发调用不能分别压缩：把 callA/resultA 配对为一个组、callB/resultB
+ * 配对为另一个组会使 [callA, callB, resultA, resultB] 变成 [callA, resultA, callB,
+ * resultB]。因此从第一个未完成调用到所有调用完成的窗口整体保持原顺序并原子保留。
+ */
+function createFunctionToolGroup(
+  items: AgentInputItem[],
+  callIds: Set<string>,
+): ContextItemGroup {
+  const [callId] = callIds;
+  const call = items.find(isFunctionCall);
+  const isSingleCall = callIds.size === 1 && callId !== undefined && call !== undefined;
+
+  return {
+    items,
+    ...(isSingleCall
+      ? { callId, functionName: call.name }
+      : {}),
+    kind: "function_tool",
+  };
 }
 
 interface IndexedItem<T> {
