@@ -1,6 +1,25 @@
-import type { AgentInputItem, FunctionCallResultItem } from "@openai/agents";
+import type {
+  AgentInputItem,
+  FunctionCallResultItem,
+  ModelInputData,
+} from "@openai/agents";
 
+import type { ContextCompactionConfig } from "../config/config-schema.js";
+import type { WorkflowEvidence } from "../runtime/workflow-types.js";
 import type { ContextCompactionFailureReason } from "../trace/trace-event.js";
+import type { TraceWriter } from "../trace/jsonl-trace-writer.js";
+
+/**
+ * 这是 SDK `callModelInputFilter` 与 provider-neutral compactor 之间的完整边界。
+ * 时钟和 trace writer 显式注入，使生命周期顺序可测试，也避免压缩模块读取全局状态。
+ */
+export interface CompactCodingContextInput {
+  modelData: ModelInputData;
+  config: ContextCompactionConfig;
+  pinnedEvidence: WorkflowEvidence[];
+  traceWriter: TraceWriter;
+  now: () => string;
+}
 
 /**
  * Context 压缩按逻辑组而不是单条 item 工作。函数调用与其结果必须作为一个组，
