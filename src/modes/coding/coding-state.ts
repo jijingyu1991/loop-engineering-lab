@@ -19,6 +19,7 @@ export type CodingStopReason =
   | "user_action_required"
   | "approval_required"
   | "approval_rejected"
+  | "context_budget_exceeded"
   | "reviewer_failed"
   | "reviewer_timed_out"
   | "runtime_error";
@@ -51,6 +52,9 @@ export type CodingExecutor = (input: {
   classification: CodingTaskClassification;
   instructions: string;
   revisionInstructions: string[];
+  // coordinator 只传递当前 workflow 已接受的 evidence；executor 获得数组副本，
+  // 因而不能通过修改引用反向污染状态或后续 reviewer 所依据的可信上下文。
+  pinnedEvidence: WorkflowEvidence[];
 }) => Promise<CodingExecutorResult>;
 
 // reviewer 只能读取本次 executor 完成后冻结的 trace 快照与当前摘要，并返回建议。

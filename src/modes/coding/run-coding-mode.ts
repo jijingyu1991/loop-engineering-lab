@@ -29,6 +29,7 @@ const CODING_STOP_REASONS = new Set<CodingStopReason>([
   "user_action_required",
   "approval_required",
   "approval_rejected",
+  "context_budget_exceeded",
   "reviewer_failed",
   "reviewer_timed_out",
   "runtime_error",

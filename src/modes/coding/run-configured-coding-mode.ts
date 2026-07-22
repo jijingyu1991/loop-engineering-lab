@@ -9,6 +9,7 @@ import {
   createToolRuntimeConfig,
 } from "../../agents/tools/tool-runtime-config.js";
 import { loadLoopConfig } from "../../config/load-config.js";
+import type { WorkflowEvidence } from "../../runtime/workflow-types.js";
 import { runSubagent } from "../../subagents/run-subagent.js";
 import { createReviewerAgent } from "../../subagents/reviewer/create-reviewer-agent.js";
 import {
@@ -41,9 +42,13 @@ export function createCodingExecutorPrompt(input: {
   classificationReason: string;
   workflowInstructions: string;
   revisionInstructions: string[];
+  pinnedEvidence: WorkflowEvidence[];
 }): string {
   const coordinatorData = {
     workflowInstructions: input.workflowInstructions,
+    // WorkflowEvidence 由 coordinator 累计并验证其来源，因此放在可信 envelope；
+    // 数组副本防止 prompt 构造过程与 workflow state 共享可变引用。
+    contextPackage: { pinnedEvidence: [...input.pinnedEvidence] },
     // 首次尝试完全省略 reviewerRevision；只有 reviewer 实际返回 revise 后，才由
     // coordinator 创建这个独立字段。原始请求即使包含同名标题也只能留在下方字符串。
     ...(input.revisionInstructions.length > 0
@@ -122,6 +127,7 @@ export async function runConfiguredCodingMode(
         classification,
         instructions,
         revisionInstructions,
+        pinnedEvidence,
       }) => {
         const prompt = createCodingExecutorPrompt({
           request: rawRequest,
@@ -129,6 +135,7 @@ export async function runConfiguredCodingMode(
           classificationReason: classification.reason,
           workflowInstructions: instructions,
           revisionInstructions,
+          pinnedEvidence,
         });
 
         return runCodingAgent({
@@ -136,6 +143,8 @@ export async function runConfiguredCodingMode(
           agent: codingAgent,
           prompt,
           maxTurns,
+          contextCompaction: loaded.config.contextCompaction,
+          pinnedEvidence,
           traceWriter: traceJournal,
           now,
         });

@@ -107,6 +107,10 @@ export function createCodingWorkflow(input: {
             classification: state.classification,
             instructions: prompt.instructions,
             revisionInstructions: state.revisionInstructions,
+            // 首次调用包含分类证据；revise 后还包含 reviewer 已接受进入状态的决定证据。
+            // 数组和记录都复制，executor 即使误改 evidence 字段也不能污染 coordinator
+            // 持有的累计状态或下一次 reviewer-driven retry 的可信输入。
+            pinnedEvidence: state.evidence.map((evidence) => ({ ...evidence })),
           });
 
           if (executorResult.type === "stopped") {

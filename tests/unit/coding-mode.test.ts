@@ -21,6 +21,12 @@ import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
 import { TraceInfrastructureError } from "../../src/trace/trace-infrastructure-error.js";
 
+const testContextCompaction = {
+  maxInputChars: 500,
+  keepRecentItems: 1,
+  maxToolSummaryChars: 120,
+};
+
 class MemoryTraceWriter implements TraceWriter {
   public readonly events: TraceEvent[] = [];
 
@@ -225,6 +231,18 @@ for (const [taskType, expectedStopReason] of cases) {
       executor: async (input) => {
         executionCalls += 1;
         receivedInstructions = input.instructions;
+        assert.deepEqual(input.pinnedEvidence, [
+          {
+            kind: "classification_objective",
+            source: taskType,
+            summary: "Normalized objective",
+          },
+          {
+            kind: "classification_reason",
+            source: taskType,
+            summary: "Matched test workflow",
+          },
+        ]);
         return {
           type: "completed",
           output: taskType === "propose_implementation_plan"
@@ -374,40 +392,45 @@ test("appends the exact no-modification disclosure to a noncompliant implementat
   assert.equal(result.stopReason, "implementation_plan_completed");
 });
 
-test("forwards a blocked executor result to the terminal trace", async () => {
-  const traceWriter = new MemoryTraceWriter();
+for (const [status, reason] of [
+  ["blocked", "approval_required"],
+  ["failed", "context_budget_exceeded"],
+] as const) {
+  test(`forwards ${reason} executor results to the terminal trace`, async () => {
+    const traceWriter = new MemoryTraceWriter();
 
-  const result = await runCodingMode({
-    request: "Diagnose the failure",
-    activeModel: "test-model",
-    tracePath: "traces/blocked.jsonl",
-    maxSteps: 2,
-    traceWriter,
-    classifier: async () => ({
-      taskType: "diagnose_test_failure",
-      objective: "Find the cause",
-      reason: "A test failed",
-    }),
-    executor: async () => ({
-      type: "stopped",
-      status: "blocked",
-      reason: "approval_required",
-    }),
-    reviewer: reviewerMustNotRun,
-    traceSnapshot: () => traceWriter.snapshot(),
+    const result = await runCodingMode({
+      request: "Diagnose the failure",
+      activeModel: "test-model",
+      tracePath: `traces/${reason}.jsonl`,
+      maxSteps: 2,
+      traceWriter,
+      classifier: async () => ({
+        taskType: "diagnose_test_failure",
+        objective: "Find the cause",
+        reason: "A test failed",
+      }),
+      executor: async () => ({
+        type: "stopped",
+        status,
+        reason,
+      }),
+      reviewer: reviewerMustNotRun,
+      traceSnapshot: () => traceWriter.snapshot(),
+    });
+
+    assert.equal(result.status, status);
+    assert.equal(result.stopReason, reason);
+    assert.equal(result.finalOutput, null);
+    const terminalEvent = traceWriter.events.at(-1);
+    assert.ok(terminalEvent);
+    assert.equal(terminalEvent.event, "coding_run_stopped");
+    if (terminalEvent.event === "coding_run_stopped") {
+      assert.equal(terminalEvent.status, status);
+      assert.equal(terminalEvent.stopReason, reason);
+    }
   });
-
-  assert.equal(result.status, "blocked");
-  assert.equal(result.stopReason, "approval_required");
-  assert.equal(result.finalOutput, null);
-  const terminalEvent = traceWriter.events.at(-1);
-  assert.ok(terminalEvent);
-  assert.equal(terminalEvent.event, "coding_run_stopped");
-  if (terminalEvent.event === "coding_run_stopped") {
-    assert.equal(terminalEvent.status, "blocked");
-    assert.equal(terminalEvent.stopReason, "approval_required");
-  }
-});
+}
 
 test("rejects when the trace writer fails", async () => {
   await assert.rejects(
@@ -551,6 +574,8 @@ test("propagates a trace failure wrapped by the coding Agent Runner", async () =
       agent: {} as CodingAgent,
       prompt: "explain",
       maxTurns: 3,
+      contextCompaction: testContextCompaction,
+      pinnedEvidence: [],
       traceWriter,
     }),
     reviewer: reviewerMustNotRun,
@@ -654,6 +679,7 @@ test("forces failed status when an unknown workflow reason maps to runtime_error
 test("revises once and passes reviewer feedback to the executor", async () => {
   const traceWriter = new MemoryTraceWriter();
   const feedbacks: string[][] = [];
+  const executorEvidence: Array<readonly { kind: string; source: string; summary: string }[]> = [];
   const reviewerAttempts: number[] = [];
   let reviews = 0;
   const rejectedExecutorEvidence = {
@@ -702,8 +728,9 @@ test("revises once and passes reviewer feedback to the executor", async () => {
       objective: "Explain the workflow",
       reason: "Explanation requested",
     }),
-    executor: async ({ revisionInstructions }) => {
+    executor: async ({ pinnedEvidence, revisionInstructions }) => {
       feedbacks.push([...revisionInstructions]);
+      executorEvidence.push(pinnedEvidence);
       const attempt = feedbacks.length;
       return {
         type: "completed",
@@ -741,6 +768,21 @@ test("revises once and passes reviewer feedback to the executor", async () => {
     [],
     ["Add the missing trace-backed explanation."],
   ]);
+  assert.deepEqual(executorEvidence[0], [
+    {
+      kind: "classification_objective",
+      source: "explain_module",
+      summary: "Explain the workflow",
+    },
+    {
+      kind: "classification_reason",
+      source: "explain_module",
+      summary: "Explanation requested",
+    },
+  ]);
+  assert.ok(executorEvidence[1]?.some(
+    (item) => item.kind === "review_decision",
+  ));
   assert.equal(result.status, "completed");
   assert.equal(result.stopReason, "explanation_completed");
   assert.equal(result.completedSteps, 3);
@@ -1059,6 +1101,49 @@ test("does not invoke reviewer when executor stops", async () => {
   assert.equal(result.status, "blocked");
   assert.equal(result.stopReason, "approval_required");
   assert.equal(result.finalOutput, null);
+});
+
+test("isolates workflow evidence objects from executor mutation", async () => {
+  const traceWriter = new MemoryTraceWriter();
+  const classification = {
+    taskType: "explain_module" as const,
+    objective: "Explain immutable workflow evidence",
+    reason: "Evidence isolation requested",
+  };
+
+  const result = await runWorkflow({
+    definition: createCodingWorkflow({
+      taskType: classification.taskType,
+      executor: async ({ pinnedEvidence }) => {
+        const firstEvidence = pinnedEvidence[0];
+        assert.ok(firstEvidence);
+        firstEvidence.summary = "executor tampered with trusted state";
+        return {
+          type: "stopped",
+          status: "blocked",
+          reason: "approval_required",
+        };
+      },
+      reviewer: reviewerMustNotRun,
+      traceWriter,
+      traceSnapshot: () => traceWriter.snapshot(),
+    }),
+    initialState: {
+      request: "Explain workflow evidence",
+      classification,
+      output: null,
+      evidence: [],
+      attempt: 0,
+      revisionInstructions: [],
+    },
+    maxSteps: 2,
+    traceWriter,
+  });
+
+  assert.equal(
+    result.state.evidence[0]?.summary,
+    "Explain immutable workflow evidence",
+  );
 });
 
 test("does not report success when reviewer fails or times out", async (t) => {
