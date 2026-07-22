@@ -180,6 +180,36 @@ Coding mode 目前只向 Agent 暴露文件读取、workspace 搜索和经过权
 文件及 `dist/` 等生成物；因此这里的边界是 Coding mode 不会有意编辑源文件，而不是保证
 执行前后 workspace 的每个文件都保持不变。
 
+### Context compaction 与输入预算
+
+Coding mode 会在每次内部模型调用前执行确定性的 context compaction。它保留最新的逻辑
+tool/message 组、已接受的 workflow evidence，以及可执行的失败结论；较早的成功工具输出
+会变成有上限的本地摘要。若首条可信 prompt、最近逻辑组或失败结论等受保护内容仍无法放进
+预算，运行会以 `context_budget_exceeded` 停止，不会静默丢弃证据。
+
+`config/loop.config.json` 的 `contextCompaction` 区块控制这个边界：
+
+```json
+{
+  "contextCompaction": {
+    "maxInputChars": 60000,
+    "keepRecentItems": 8,
+    "maxToolSummaryChars": 1200
+  }
+}
+```
+
+- `maxInputChars`：每次发给模型的 `instructions + input` 序列化字符上限。
+- `keepRecentItems`：按原样保留的最新逻辑 tool/message 组数量；一次 function call 和
+  对应 result 始终属于同一个逻辑组。
+- `maxToolSummaryChars`：较早成功工具 result 的单条摘要字符上限；失败 result 需要完整的
+  错误原因、重试/用户操作字段、下一步和结论，装不下时会 fail closed。
+
+当实际发生压缩时，JSONL trace 会写入 `context_compaction_started`，随后写入
+`context_compaction_completed` 或 `context_compaction_failed`。这些事件记录预算、前后大小、
+保留组数量、pinned evidence ID 和摘要元数据，不会重复写入大段原始工具输出。既有的
+`tool_started`、`tool_completed` 与 `tool_failed` JSONL 事件仍是完整工具输入/输出审计来源。
+
 ### Handoff artifact
 
 每次 Coding mode 进入 `completed`、`failed`、`blocked` 或 `cancelled` 终态后，都会

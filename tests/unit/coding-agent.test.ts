@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  type AgentInputItem,
   type CallModelInputFilter,
   type ModelInputData,
   ToolCallError,
@@ -25,6 +26,7 @@ import type {
   ContextCompactionConfig,
   ModelConfig,
 } from "../../src/config/config-schema.js";
+import { createPinnedEvidenceId } from "../../src/context/compact-coding-context.js";
 import { measureModelInput } from "../../src/context/context-item-groups.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
@@ -455,6 +457,185 @@ test("compacts every coding model input through the SDK hook", async () => {
     output: "Compacted result",
     evidence: [],
   });
+});
+
+test("bounds a 20-group coding history without changing the eight newest groups", async () => {
+  const pinnedEvidence = [{
+    kind: "review_decision",
+    source: "review-coding-attempt",
+    summary: "Reviewer confirmed the workflow evidence must remain trusted.",
+  }];
+  // 首条消息是 coordinator 构造的可信 prompt，而不是工具输出。它和最近窗口都属于
+  // compactor 的保护内容；用真实 prompt 工厂生成，确保断言覆盖 production 的数据形状。
+  const trustedPrompt = createCodingExecutorPrompt({
+    request: "Diagnose the long coding history.",
+    objective: "Keep the verified workflow evidence.",
+    classificationReason: "The task needs a bounded model context.",
+    workflowInstructions: "Inspect the retained evidence before responding.",
+    revisionInstructions: [],
+    pinnedEvidence,
+  });
+  const requiredError = {
+    type: "process_failed",
+    message: "The old focused test still fails.",
+    retryable: true,
+    userActionRequired: false,
+    suggestedNextStep: "Inspect the retained assertion evidence.",
+    evidence: { exitCode: 1, command: "npm test -- context-compaction" },
+  };
+  const createSuccessfulGroup = (
+    index: number,
+    output: string,
+  ): AgentInputItem[] => [
+    {
+      type: "function_call",
+      callId: `long-history-${index}`,
+      name: "workspace_shell",
+      arguments: JSON.stringify({ executable: "npm", args: ["test", `${index}`] }),
+    },
+    {
+      type: "function_call_result",
+      callId: `long-history-${index}`,
+      name: "workspace_shell",
+      status: "completed",
+      output: JSON.stringify({ ok: true, data: { stdout: output } }),
+    },
+  ];
+  const failedGroup: AgentInputItem[] = [
+    {
+      type: "function_call",
+      callId: "long-history-failed",
+      name: "workspace_shell",
+      arguments: JSON.stringify({
+        executable: "npm",
+        args: ["test", "context-compaction"],
+      }),
+    },
+    {
+      type: "function_call_result",
+      callId: "long-history-failed",
+      name: "workspace_shell",
+      status: "completed",
+      output: JSON.stringify({ ok: false, error: requiredError }),
+    },
+  ];
+  // 前 12 个 tool 组均为可压缩的旧历史：其中第一个成功输出远超摘要上限，第二个
+  // 则是必须保留完整失败结论的旧尝试。后 8 个组的 payload 特意唯一，便于证明
+  // logical group window 没有被摘要、截断或重排。
+  const oldSuccessfulGroups = Array.from({ length: 11 }, (_, offset) => (
+    createSuccessfulGroup(
+      offset + 2,
+      `old-${offset + 2}:${"o".repeat(1_800)}`,
+    )
+  ));
+  const recentGroups = Array.from({ length: 8 }, (_, offset) => (
+    createSuccessfulGroup(
+      offset + 13,
+      `recent-exact-payload-${offset + 13}:${"r".repeat(48)}`,
+    )
+  ));
+  const originalInput: AgentInputItem[] = [
+    { role: "user", content: trustedPrompt },
+    ...createSuccessfulGroup(1, `old-oversized:${"x".repeat(4_000)}`),
+    ...failedGroup,
+    ...oldSuccessfulGroups.flat(),
+    ...recentGroups.flat(),
+  ];
+  const contextCompaction: ContextCompactionConfig = {
+    maxInputChars: 20_000,
+    keepRecentItems: 8,
+    maxToolSummaryChars: 720,
+  };
+  const traceWriter = new MemoryTraceWriter();
+  let filteredModelData: ModelInputData | undefined;
+  const runner = {
+    run: async (
+      _agent: unknown,
+      _prompt: unknown,
+      options: { callModelInputFilter?: CallModelInputFilter },
+    ) => {
+      const filter = options.callModelInputFilter;
+      assert.ok(filter);
+      // 这里调用的是 runCodingAgent 传给 SDK 的 callback，覆盖每轮模型调用会经过的
+      // 真实边界；fixture 的 item 字段也使用 SDK 的 function_call/result 形状。
+      filteredModelData = await filter({
+        modelData: {
+          instructions: "Preserve trusted workflow evidence and actionable failures.",
+          input: originalInput,
+        },
+        agent: {} as Parameters<CallModelInputFilter>[0]["agent"],
+        context: undefined,
+      });
+      return {
+        finalOutput: { output: "Bounded history result", evidence: [] },
+        interruptions: [],
+      };
+    },
+  } as unknown as Runner;
+
+  const result = await runCodingAgent({
+    runner,
+    agent: {} as CodingAgent,
+    prompt: "diagnose",
+    maxTurns: 7,
+    contextCompaction,
+    pinnedEvidence,
+    traceWriter,
+    now: () => "2026-07-22T00:00:00.000Z",
+  });
+
+  assert.deepEqual(result, {
+    type: "completed",
+    output: "Bounded history result",
+    evidence: [],
+  });
+  assert.ok(filteredModelData);
+  assert.ok(measureModelInput(
+    filteredModelData.instructions ?? "",
+    filteredModelData.input,
+  ) <= contextCompaction.maxInputChars);
+  assert.deepEqual(filteredModelData.input[0], originalInput[0]);
+  assert.match(
+    trustedPrompt,
+    /"contextPackage":\{"pinnedEvidence":/,
+  );
+
+  const compactedRecentGroups = filteredModelData.input.slice(-recentGroups.flat().length);
+  assert.deepEqual(compactedRecentGroups, recentGroups.flat());
+
+  const failedResult = filteredModelData.input.find((item) => (
+    item.type === "function_call_result" && item.callId === "long-history-failed"
+  ));
+  assert.ok(failedResult?.type === "function_call_result");
+  const failedOutput = JSON.parse(String(failedResult.output)) as Record<string, unknown>;
+  assert.deepEqual(failedOutput.error, requiredError);
+  assert.equal(failedOutput.conclusion, "attempt_failed");
+
+  const oldSuccessfulResult = filteredModelData.input.find((item) => (
+    item.type === "function_call_result" && item.callId === "long-history-1"
+  ));
+  assert.ok(oldSuccessfulResult?.type === "function_call_result");
+  const oldSuccessfulOutput = JSON.parse(
+    String(oldSuccessfulResult.output),
+  ) as Record<string, unknown>;
+  assert.equal(oldSuccessfulOutput.compacted, true);
+  assert.ok(String(oldSuccessfulResult.output).length <= contextCompaction.maxToolSummaryChars);
+
+  const completed = traceWriter.events.find((event) => (
+    event.event === "context_compaction_completed"
+  ));
+  assert.ok(completed?.event === "context_compaction_completed");
+  assert.ok(completed.summarizedToolResults >= 1);
+  assert.deepEqual(completed.pinnedEvidenceIds, [
+    createPinnedEvidenceId(pinnedEvidence[0]!),
+  ]);
+  assert.ok(completed.summaries.some((summary) => (
+    summary.callId === "long-history-failed" && summary.status === "failed"
+  )));
+  assert.deepEqual(
+    traceWriter.events.map((event) => event.event),
+    ["context_compaction_started", "context_compaction_completed"],
+  );
 });
 
 test("maps an irreducible coding context to context_budget_exceeded", async () => {
