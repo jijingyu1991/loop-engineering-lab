@@ -9,6 +9,10 @@ import {
   createToolRuntimeConfig,
 } from "../../agents/tools/tool-runtime-config.js";
 import { loadLoopConfig } from "../../config/load-config.js";
+import {
+  CODING_EXECUTOR_INVOCATION_PREFIX,
+  createPinnedEvidenceContextPackage,
+} from "../../context/pinned-evidence-context.js";
 import type { WorkflowEvidence } from "../../runtime/workflow-types.js";
 import { runSubagent } from "../../subagents/run-subagent.js";
 import { createReviewerAgent } from "../../subagents/reviewer/create-reviewer-agent.js";
@@ -46,9 +50,9 @@ export function createCodingExecutorPrompt(input: {
 }): string {
   const coordinatorData = {
     workflowInstructions: input.workflowInstructions,
-    // WorkflowEvidence 由 coordinator 累计并验证其来源，因此放在可信 envelope；
-    // 数组副本防止 prompt 构造过程与 workflow state 共享可变引用。
-    contextPackage: { pinnedEvidence: [...input.pinnedEvidence] },
+    // contextPackage 的位置由 coordinator 保护，但 evidence 字段（尤其 summary）仍是
+    // 不可信数据而非指令。共用规范化构造器让 compactor 能审计完全相同的 payload。
+    contextPackage: createPinnedEvidenceContextPackage(input.pinnedEvidence),
     // 首次尝试完全省略 reviewerRevision；只有 reviewer 实际返回 revise 后，才由
     // coordinator 创建这个独立字段。原始请求即使包含同名标题也只能留在下方字符串。
     ...(input.revisionInstructions.length > 0
@@ -64,7 +68,7 @@ export function createCodingExecutorPrompt(input: {
       classificationReason: input.classificationReason,
     },
   };
-  return `CODING EXECUTOR INVOCATION (JSON)\n${JSON.stringify(envelope)}`;
+  return `${CODING_EXECUTOR_INVOCATION_PREFIX}${JSON.stringify(envelope)}`;
 }
 
 /**

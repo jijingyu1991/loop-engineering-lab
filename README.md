@@ -187,6 +187,13 @@ tool/message 组、已接受的 workflow evidence，以及可执行的失败结�
 会变成有上限的本地摘要。若首条可信 prompt、最近逻辑组或失败结论等受保护内容仍无法放进
 预算，运行会以 `context_budget_exceeded` 停止，不会静默丢弃证据。
 
+`coordinatorData.contextPackage.pinnedEvidence` 位于受保护的 coordinator envelope 中，
+但其每个字段（尤其 `summary`）仍是数据，绝不是可执行指令。只有 compactor 验证模型可见的
+首个受保护 prompt 含有完全相同的规范化 evidence payload 后，trace 才会记录对应 ID；不匹配
+会 fail closed。成功摘要里的 `sourceFormat` 只表示摘要来自 `tool_data` 还是 `raw_output`，
+不声明文件、命令或 trace provenance。`operation` 仅对 `workspace_file_read`、
+`workspace_search` 和 `workspace_shell` 这些语义封闭的 Coding 工具写入；未知工具不猜测该字段。
+
 `config/loop.config.json` 的 `contextCompaction` 区块控制这个边界：
 
 ```json
@@ -208,7 +215,12 @@ tool/message 组、已接受的 workflow evidence，以及可执行的失败结�
 当实际发生压缩时，JSONL trace 会写入 `context_compaction_started`，随后写入
 `context_compaction_completed` 或 `context_compaction_failed`。这些事件记录预算、前后大小、
 保留组数量、pinned evidence ID 和摘要元数据，不会重复写入大段原始工具输出。既有的
-`tool_started`、`tool_completed` 与 `tool_failed` JSONL 事件仍是完整工具输入/输出审计来源。
+`tool_started`、`tool_completed` 与 `tool_failed` JSONL 事件是权威的结构化工具生命周期
+审计来源；它们并不承诺保存每次调用未经清洗、未经裁剪的完整原始输入/输出。
+
+当前 adapter 必须看到完整的本地 item 历史才能安全配对、摘要和删除逻辑组，因此明确不支持
+SDK 的 `conversationId` 或 `previousResponseId` server-managed history 模式；传入任一选项会
+在调用 Runner 前被拒绝，不会假装已经对服务端隐藏的历史执行压缩。
 
 ### Handoff artifact
 

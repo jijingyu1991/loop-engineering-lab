@@ -19,6 +19,7 @@ import {
   groupContextItems,
   measureModelInput,
 } from "./context-item-groups.js";
+import { hasExactPinnedEvidenceContext } from "./pinned-evidence-context.js";
 import { summarizeFunctionResult } from "./summarize-tool-result.js";
 
 interface CompactedGroup {
@@ -106,6 +107,19 @@ export async function compactCodingContext(
 
   await writeStarted(groups.length);
 
+  // 只有第一个、后续始终按原文保护的 trusted coordinator item 含有完全相同的
+  // 规范化 evidence payload，completed trace 才能记录其 ID。summary 文本仍只是
+  // untrusted data；这里验证可见性与位置，不赋予其指令权限。
+  if (
+    pinnedEvidence.length > 0 &&
+    !hasExactPinnedEvidenceContext(modelData.input, pinnedEvidence)
+  ) {
+    return failCompaction(
+      "pinned_evidence_mismatch",
+      "Pinned evidence does not match the protected coordinator context.",
+    );
+  }
+
   const recentStart = Math.max(0, groups.length - config.keepRecentItems);
   const compactedGroups: CompactedGroup[] = [];
 
@@ -163,7 +177,16 @@ export async function compactCodingContext(
 
   // 对最终序列重新分组会再次执行 orphan/duplicate 校验；预算也必须以真正返回给 SDK
   // 的序列复算，不能依赖中间选择阶段的估计。
-  const verifiedGroups = groupContextItems(compactedInput);
+  let verifiedGroups: ContextItemGroup[];
+  try {
+    verifiedGroups = groupContextItems(compactedInput);
+  } catch (error) {
+    if (error instanceof ContextBudgetExceededError) {
+      return failCompaction(error.reason, error.message);
+    }
+
+    throw error;
+  }
   const afterChars = measureModelInput(instructions, compactedInput);
 
   if (afterChars > config.maxInputChars) {
@@ -230,7 +253,10 @@ function summarizeToolGroup(
       maxChars,
     );
     summaries.push(summary.manifest);
-    return summary.item;
+    // SDK 在调用 filter 前深克隆每个 item，并以 clone 身份回溯原始历史。这里只原位
+    // 替换该 clone 的 output，既保持 call/result 关联身份，也不会改写 Runner 缓存的原件。
+    item.output = summary.item.output;
+    return item;
   });
 
   return {

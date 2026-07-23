@@ -167,6 +167,7 @@ export interface SubagentFinishedEvent {
 
 export type ContextCompactionFailureReason =
   | "invalid_tool_history"
+  | "pinned_evidence_mismatch"
   | "pinned_content_exceeds_budget";
 
 /**

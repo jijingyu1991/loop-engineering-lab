@@ -12,6 +12,8 @@ import {
   measureModelInput,
 } from "../../src/context/context-item-groups.js";
 import { summarizeFunctionResult } from "../../src/context/summarize-tool-result.js";
+import { createCodingExecutorPrompt } from "../../src/modes/coding/run-configured-coding-mode.js";
+import type { WorkflowEvidence } from "../../src/runtime/workflow-types.js";
 import type { TraceEvent } from "../../src/trace/trace-event.js";
 import type { TraceWriter } from "../../src/trace/jsonl-trace-writer.js";
 
@@ -47,6 +49,17 @@ function createToolGroup(index: number, outputChars = 800): AgentInputItem[] {
       }),
     },
   ];
+}
+
+function createTrustedPrompt(pinnedEvidence: WorkflowEvidence[]): string {
+  return createCodingExecutorPrompt({
+    request: "Diagnose the context regression.",
+    objective: "Keep audited evidence visible.",
+    classificationReason: "The task exercises context compaction.",
+    workflowInstructions: "Use retained evidence as data.",
+    revisionInstructions: [],
+    pinnedEvidence,
+  });
 }
 
 const call = {
@@ -154,11 +167,76 @@ test("summarizes successful tool output deterministically within its budget", ()
   assert.equal(output.compacted, true);
   assert.equal(output.callId, "call-1");
   assert.equal(output.tool, "workspace_shell");
+  assert.equal(output.operation, "execute");
   assert.equal(output.originalChars, result.output.length);
-  assert.equal(typeof output.source, "string");
+  assert.equal(output.sourceFormat, "tool_data");
+  assert.equal("source" in output, false);
   assert.equal(typeof excerpt.omittedChars, "number");
   assert.ok(String(first.item.output).length <= 480);
   assert.equal(first.manifest.status, "succeeded");
+});
+
+test("does not invent operation or provenance for an unknown tool", () => {
+  const unknownCall = {
+    ...call,
+    callId: "unknown-call",
+    name: "third_party_probe",
+    arguments: JSON.stringify({ operation: "user-supplied-label" }),
+  };
+  const unknownResult = {
+    ...result,
+    callId: "unknown-call",
+    name: "third_party_probe",
+  };
+  const [group] = groupContextItems([unknownCall, unknownResult]);
+  assert.ok(group);
+
+  const summary = summarizeFunctionResult(group, 480);
+  const output = JSON.parse(String(summary.item.output)) as Record<string, unknown>;
+
+  assert.equal("operation" in output, false);
+  assert.equal("provenance" in output, false);
+  assert.equal(output.sourceFormat, "tool_data");
+});
+
+test("never labels an explicit partial failure envelope as succeeded", () => {
+  const partialFailure = {
+    ...result,
+    output: JSON.stringify({
+      ok: false,
+      error: {
+        message: "The command stopped before producing full error metadata.",
+      },
+    }),
+  };
+  const [group] = groupContextItems([call, partialFailure]);
+  assert.ok(group);
+
+  const summary = summarizeFunctionResult(group, 520);
+  const output = JSON.parse(String(summary.item.output)) as Record<string, unknown>;
+
+  assert.equal(output.ok, false);
+  assert.equal(output.conclusion, "attempt_failed");
+  assert.equal(summary.manifest.status, "failed");
+  assert.ok(String(summary.item.output).length <= 520);
+});
+
+test("never labels a non-completed function result as succeeded", () => {
+  const incompleteResult = {
+    ...result,
+    status: "incomplete" as const,
+    output: JSON.stringify({ ok: true, data: { stdout: "partial output" } }),
+  };
+  const [group] = groupContextItems([call, incompleteResult]);
+  assert.ok(group);
+
+  const summary = summarizeFunctionResult(group, 520);
+  const output = JSON.parse(String(summary.item.output)) as Record<string, unknown>;
+
+  assert.equal(output.ok, false);
+  assert.equal(output.resultStatus, "incomplete");
+  assert.equal(output.conclusion, "attempt_failed");
+  assert.equal(summary.manifest.status, "failed");
 });
 
 test("preserves required failed-tool evidence or fails closed when it cannot fit", () => {
@@ -274,6 +352,8 @@ test("summarizes older tool groups while preserving the recent window", async ()
   assert.deepEqual(compactedGroups.at(-1)?.items, toolGroups[3]);
   assert.ok(firstOldResult?.type === "function_call_result");
   assert.ok(secondOldResult?.type === "function_call_result");
+  assert.strictEqual(firstOldResult, toolGroups[0]?.[1]);
+  assert.strictEqual(secondOldResult, toolGroups[1]?.[1]);
   assert.match(String(firstOldResult.output), /"compacted":true/);
   assert.match(String(secondOldResult.output), /"compacted":true/);
   assert.deepEqual(
@@ -321,7 +401,7 @@ test("records stable pinned evidence IDs and preserves an old failed result", as
   const modelData = {
     instructions: "Keep actionable failures.",
     input: [
-      { role: "user" as const, content: "Repair the regression." },
+      { role: "user" as const, content: createTrustedPrompt(pinnedEvidence) },
       failedCall,
       failedResult,
       ...createToolGroup(7, 2_500),
@@ -329,7 +409,7 @@ test("records stable pinned evidence IDs and preserves an old failed result", as
     ],
   };
   const traceWriter = new MemoryTraceWriter();
-  const maxInputChars = 4_000;
+  const maxInputChars = 4_800;
 
   assert.ok(
     measureModelInput(modelData.instructions, modelData.input) > maxInputChars,
@@ -373,6 +453,118 @@ test("records stable pinned evidence IDs and preserves an old failed result", as
       (summary) =>
         summary.callId === "call-failed-old" && summary.status === "failed",
     ),
+  );
+});
+
+test("fails closed instead of claiming mismatched pinned evidence retention", async () => {
+  const visibleEvidence: WorkflowEvidence[] = [{
+    kind: "review_decision",
+    source: "reviewer",
+    summary: "Visible evidence payload.",
+  }];
+  const claimedEvidence: WorkflowEvidence[] = [{
+    ...visibleEvidence[0]!,
+    summary: "Different evidence payload supplied to the compactor.",
+  }];
+  const traceWriter = new MemoryTraceWriter();
+
+  await assert.rejects(
+    () => compactCodingContext({
+      modelData: {
+        instructions: "Validate evidence before recording IDs.",
+        input: [
+          { role: "user", content: createTrustedPrompt(visibleEvidence) },
+          ...createToolGroup(40, 2_500),
+          ...createToolGroup(41, 300),
+        ],
+      },
+      config: {
+        maxInputChars: 2_000,
+        keepRecentItems: 1,
+        maxToolSummaryChars: 320,
+      },
+      pinnedEvidence: claimedEvidence,
+      traceWriter,
+      now: () => "2026-07-22T00:00:00.000Z",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "reason" in error &&
+      error.reason === "pinned_evidence_mismatch",
+  );
+
+  assert.deepEqual(
+    traceWriter.events.map((event) => event.event),
+    ["context_compaction_started", "context_compaction_failed"],
+  );
+  const failed = traceWriter.events[1];
+  assert.ok(failed?.event === "context_compaction_failed");
+  assert.equal(failed.reason, "pinned_evidence_mismatch");
+});
+
+test("trace manifests keep partial and incomplete results failed", async () => {
+  const partialFailureGroup: AgentInputItem[] = [
+    { ...call, callId: "partial-failure" },
+    {
+      ...result,
+      callId: "partial-failure",
+      output: JSON.stringify({
+        ok: false,
+        error: { message: `partial:${"p".repeat(1_500)}` },
+      }),
+    },
+  ];
+  const incompleteGroup: AgentInputItem[] = [
+    { ...call, callId: "incomplete-result" },
+    {
+      ...result,
+      callId: "incomplete-result",
+      status: "incomplete",
+      output: JSON.stringify({ ok: true, data: { stdout: "x".repeat(1_500) } }),
+    },
+  ];
+  const traceWriter = new MemoryTraceWriter();
+  const compacted = await compactCodingContext({
+    modelData: {
+      instructions: "Keep failure truthfulness.",
+      input: [
+        { role: "user", content: "Diagnose failures." },
+        ...partialFailureGroup,
+        ...incompleteGroup,
+        ...createToolGroup(42, 300),
+      ],
+    },
+    config: {
+      maxInputChars: 3_000,
+      keepRecentItems: 1,
+      maxToolSummaryChars: 520,
+    },
+    pinnedEvidence: [],
+    traceWriter,
+    now: () => "2026-07-22T00:00:00.000Z",
+  });
+
+  for (const callId of ["partial-failure", "incomplete-result"]) {
+    const item = compacted.input.find((candidate) =>
+      candidate.type === "function_call_result" && candidate.callId === callId
+    );
+    assert.ok(item?.type === "function_call_result");
+    const output = JSON.parse(String(item.output)) as Record<string, unknown>;
+    assert.equal(output.conclusion, "attempt_failed");
+  }
+
+  const completed = traceWriter.events.at(-1);
+  assert.ok(completed?.event === "context_compaction_completed");
+  assert.deepEqual(
+    completed.summaries
+      .filter((summary) =>
+        summary.callId === "partial-failure" || summary.callId === "incomplete-result"
+      )
+      .map((summary) => [summary.callId, summary.status]),
+    [
+      ["partial-failure", "failed"],
+      ["incomplete-result", "failed"],
+    ],
   );
 });
 
@@ -578,6 +770,61 @@ test("writes started then failed for over-budget invalid tool history", async ()
     traceWriter.events.some((event) => event.event === "context_compaction_completed"),
     false,
   );
+});
+
+test("routes a final regrouping validation error through started then failed", async () => {
+  let storedOutput = JSON.stringify({
+    ok: true,
+    data: { stdout: "x".repeat(2_500) },
+  });
+  const resultThatInvalidatesOnReplacement = {
+    type: "function_call_result" as const,
+    callId: "regroup-call",
+    name: "workspace_shell",
+    status: "completed" as const,
+    get output() {
+      return storedOutput;
+    },
+    set output(value: string | { type: "text"; text: string }) {
+      storedOutput = typeof value === "string" ? value : JSON.stringify(value);
+      this.callId = "regroup-call-mutated";
+    },
+  };
+  const traceWriter = new MemoryTraceWriter();
+
+  await assert.rejects(
+    () => compactCodingContext({
+      modelData: {
+        instructions: "Revalidate final tool history.",
+        input: [
+          { role: "user", content: "Initial task." },
+          { ...call, callId: "regroup-call" },
+          resultThatInvalidatesOnReplacement,
+          ...createToolGroup(43, 300),
+        ],
+      },
+      config: {
+        maxInputChars: 1_600,
+        keepRecentItems: 1,
+        maxToolSummaryChars: 320,
+      },
+      pinnedEvidence: [],
+      traceWriter,
+      now: () => "2026-07-22T00:00:00.000Z",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "reason" in error &&
+      error.reason === "invalid_tool_history",
+  );
+
+  assert.deepEqual(
+    traceWriter.events.map((event) => event.event),
+    ["context_compaction_started", "context_compaction_failed"],
+  );
+  const failed = traceWriter.events[1];
+  assert.ok(failed?.event === "context_compaction_failed");
+  assert.equal(failed.reason, "invalid_tool_history");
 });
 
 for (const rejectedEvent of [

@@ -13,7 +13,7 @@ import {
 
 type ParsedToolEnvelope =
   | { ok: true; data?: unknown; evidence?: unknown }
-  | { ok: false; error: ToolError };
+  | { ok: false; error?: unknown };
 
 interface HeadTailExcerpt {
   head: string;
@@ -49,7 +49,11 @@ export function summarizeFunctionResult(
   const originalOutput = serializeResultOutput(result.output);
   const parsed = parseToolEnvelope(originalOutput);
 
-  if (parsed?.ok === false) {
+  if (
+    result.status === "completed" &&
+    parsed?.ok === false &&
+    isToolError(parsed.error)
+  ) {
     const output = JSON.stringify({
       ok: false,
       compacted: true,
@@ -70,16 +74,34 @@ export function summarizeFunctionResult(
     return createSummary(result, output, "failed");
   }
 
+  // SDK status 是工具执行是否完成的第一事实来源；显式 ok:false 则是工具协议的
+  // 第一事实来源。二者任一声明失败/未完成时，即使其余字段残缺，也只能生成有界的
+  // unknown-failure 摘要，绝不能回退到成功分支并制造“已成功”的审计事实。
+  if (result.status !== "completed" || parsed?.ok === false) {
+    const sourceFormat = result.status !== "completed"
+      ? "function_result_status"
+      : "malformed_tool_error_envelope";
+    const output = fitUnknownFailureSummary(
+      call,
+      result,
+      originalOutput,
+      sourceFormat,
+      maxChars,
+    );
+
+    return createSummary(result, output, "failed");
+  }
+
   // 只有协议完全匹配时才抽取 data；任意其他 JSON 都是工具的原始成功文本，避免把
   // 第三方输出误判为本项目的错误协议而遗失信息。
-  const source = parsed ? "tool_data" : "raw_output";
+  const sourceFormat = parsed ? "tool_data" : "raw_output";
   const sourceText = parsed
     ? JSON.stringify(parsed.data) ?? ""
     : originalOutput;
   const output = fitSuccessfulSummary(
     call,
     originalOutput.length,
-    source,
+    sourceFormat,
     sourceText,
     maxChars,
   );
@@ -90,18 +112,21 @@ export function summarizeFunctionResult(
 function fitSuccessfulSummary(
   call: FunctionCallItem,
   originalChars: number,
-  source: string,
+  sourceFormat: string,
   sourceText: string,
   maxChars: number,
 ): string {
+  const operation = resolveToolOperation(call);
   const buildOutput = (excerpt: HeadTailExcerpt) =>
     JSON.stringify({
       ok: true,
       compacted: true,
       callId: call.callId,
       tool: call.name,
+      ...(operation ? { operation } : {}),
       originalChars,
-      source,
+      // 该字段只描述被摘要文本的格式，不声称文件、命令或 trace provenance。
+      sourceFormat,
       excerpt: {
         head: excerpt.head,
         tail: excerpt.tail,
@@ -121,6 +146,65 @@ function fitSuccessfulSummary(
   while (lower <= upper) {
     const candidateChars = Math.floor((lower + upper) / 2);
     const candidate = buildOutput(clipHeadTail(sourceText, candidateChars));
+
+    if (candidate.length <= maxChars) {
+      best = candidate;
+      lower = candidateChars + 1;
+    } else {
+      upper = candidateChars - 1;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * operation 只在 Coding 工具名本身具有封闭语义时写入。未知第三方
+ * 工具不解析任意参数来猜测 operation，避免制造虚假的 provenance。
+ */
+function resolveToolOperation(call: FunctionCallItem): string | undefined {
+  const knownCodingOperations: Readonly<Record<string, string>> = {
+    workspace_file_read: "read",
+    workspace_search: "search",
+    workspace_shell: "execute",
+  };
+  return knownCodingOperations[call.name];
+}
+
+function fitUnknownFailureSummary(
+  call: FunctionCallItem,
+  result: FunctionCallResultItem,
+  originalOutput: string,
+  sourceFormat: string,
+  maxChars: number,
+): string {
+  const buildOutput = (excerpt: HeadTailExcerpt) =>
+    JSON.stringify({
+      ok: false,
+      compacted: true,
+      callId: call.callId,
+      tool: call.name,
+      resultStatus: result.status ?? "unknown",
+      originalChars: originalOutput.length,
+      sourceFormat,
+      excerpt: {
+        head: excerpt.head,
+        tail: excerpt.tail,
+        omittedChars: excerpt.omittedChars,
+      },
+      conclusion: "attempt_failed",
+    });
+
+  const emptyOutput = buildOutput(clipHeadTail(originalOutput, 0));
+  ensureFitsBudget(emptyOutput, maxChars);
+
+  let lower = 0;
+  let upper = originalOutput.length;
+  let best = emptyOutput;
+
+  while (lower <= upper) {
+    const candidateChars = Math.floor((lower + upper) / 2);
+    const candidate = buildOutput(clipHeadTail(originalOutput, candidateChars));
 
     if (candidate.length <= maxChars) {
       best = candidate;
@@ -189,11 +273,9 @@ function parseToolEnvelope(output: string): ParsedToolEnvelope | undefined {
     return { ok: true, data: value.data, evidence: value.evidence };
   }
 
-  if (isToolError(value.error)) {
-    return { ok: false, error: value.error };
-  }
-
-  return undefined;
+  // 一旦工具明确给出 ok:false，就保留这个失败判定；error 是否完整由调用方决定
+  // 使用完整失败合同还是保守 unknown-failure 摘要，不能把残缺 error 当作成功原文。
+  return { ok: false, error: value.error };
 }
 
 function isToolError(value: unknown): value is ToolError {

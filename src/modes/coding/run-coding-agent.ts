@@ -56,7 +56,23 @@ export async function runCodingAgent(input: {
   pinnedEvidence: WorkflowEvidence[];
   traceWriter: TraceWriter;
   now?: () => string;
+  /** Server-managed history bypasses the full local history this compactor must inspect. */
+  conversationId?: never;
+  previousResponseId?: never;
 }): Promise<CodingExecutorResult> {
+  const historyOptions = input as {
+    conversationId?: unknown;
+    previousResponseId?: unknown;
+  };
+  if (
+    historyOptions.conversationId !== undefined ||
+    historyOptions.previousResponseId !== undefined
+  ) {
+    throw new Error(
+      "Server-managed conversationId/previousResponseId history is unsupported by coding context compaction.",
+    );
+  }
+
   const now = input.now ?? (() => new Date().toISOString());
   let result;
   try {
