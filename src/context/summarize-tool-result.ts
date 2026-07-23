@@ -163,12 +163,16 @@ function fitSuccessfulSummary(
  * 工具不解析任意参数来猜测 operation，避免制造虚假的 provenance。
  */
 function resolveToolOperation(call: FunctionCallItem): string | undefined {
-  const knownCodingOperations: Readonly<Record<string, string>> = {
-    workspace_file_read: "read",
-    workspace_search: "search",
-    workspace_shell: "execute",
-  };
-  return knownCodingOperations[call.name];
+  switch (call.name) {
+    case "workspace_file_read":
+      return "read";
+    case "workspace_search":
+      return "search";
+    case "workspace_shell":
+      return "execute";
+    default:
+      return undefined;
+  }
 }
 
 function fitUnknownFailureSummary(

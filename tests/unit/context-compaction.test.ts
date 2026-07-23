@@ -199,6 +199,26 @@ test("does not invent operation or provenance for an unknown tool", () => {
   assert.equal(output.sourceFormat, "tool_data");
 });
 
+test("does not resolve an inherited prototype name as a tool operation", () => {
+  const prototypeCall = {
+    ...call,
+    callId: "prototype-call",
+    name: "__proto__",
+  };
+  const prototypeResult = {
+    ...result,
+    callId: "prototype-call",
+    name: "__proto__",
+  };
+  const [group] = groupContextItems([prototypeCall, prototypeResult]);
+  assert.ok(group);
+
+  const summary = summarizeFunctionResult(group, 480);
+  const output = JSON.parse(String(summary.item.output)) as Record<string, unknown>;
+
+  assert.equal("operation" in output, false);
+});
+
 test("never labels an explicit partial failure envelope as succeeded", () => {
   const partialFailure = {
     ...result,
